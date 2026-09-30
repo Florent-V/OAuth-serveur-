@@ -42,6 +42,27 @@ class Application extends AbstractClient
     #[ORM\Column]
     private \DateTimeImmutable $createdAt;
 
+    // --- Personnalisation des pages de connexion / inscription pour cette application ---
+
+    /** Nom du fichier logo (dans public/uploads/logos/). */
+    #[ORM\Column(length: 255, nullable: true)]
+    private ?string $logo = null;
+
+    /** Couleur principale (boutons, liens), au format #RRGGBB. */
+    #[ORM\Column(length: 7, nullable: true)]
+    #[Assert\CssColor(formats: Assert\CssColor::HEX_LONG, message: 'Couleur invalide, format attendu : #RRGGBB.')]
+    private ?string $primaryColor = null;
+
+    /** Couleur de fond de la page, au format #RRGGBB. */
+    #[ORM\Column(length: 7, nullable: true)]
+    #[Assert\CssColor(formats: Assert\CssColor::HEX_LONG, message: 'Couleur invalide, format attendu : #RRGGBB.')]
+    private ?string $backgroundColor = null;
+
+    /** Message affiché sous le titre des pages de connexion / inscription. */
+    #[ORM\Column(type: 'text', nullable: true)]
+    #[Assert\Length(max: 500)]
+    private ?string $loginMessage = null;
+
     /** Uniquement utilisé à la création (admin) : client public sans secret (SPA, mobile → PKCE obligatoire). */
     private bool $publicClient = false;
 
@@ -105,6 +126,59 @@ class Application extends AbstractClient
     public function getCreatedAt(): \DateTimeImmutable
     {
         return $this->createdAt;
+    }
+
+    public function getLogo(): ?string
+    {
+        return $this->logo;
+    }
+
+    public function setLogo(?string $logo): static
+    {
+        $this->logo = $logo ?: null;
+
+        return $this;
+    }
+
+    public function getPrimaryColor(): ?string
+    {
+        return $this->primaryColor;
+    }
+
+    public function setPrimaryColor(?string $primaryColor): static
+    {
+        $this->primaryColor = $primaryColor ? strtolower($primaryColor) : null;
+
+        return $this;
+    }
+
+    public function getBackgroundColor(): ?string
+    {
+        return $this->backgroundColor;
+    }
+
+    public function setBackgroundColor(?string $backgroundColor): static
+    {
+        $this->backgroundColor = $backgroundColor ? strtolower($backgroundColor) : null;
+
+        return $this;
+    }
+
+    public function getLoginMessage(): ?string
+    {
+        return $this->loginMessage;
+    }
+
+    public function setLoginMessage(?string $loginMessage): static
+    {
+        $this->loginMessage = null !== $loginMessage && '' !== trim($loginMessage) ? trim($loginMessage) : null;
+
+        return $this;
+    }
+
+    public function hasBranding(): bool
+    {
+        return null !== $this->logo || null !== $this->primaryColor || null !== $this->backgroundColor;
     }
 
     /**

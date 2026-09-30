@@ -11,12 +11,15 @@
             Un seul compte pour toutes vos applications.
         {% endif %}
     </p>
+    {% if application and application.loginMessage %}
+        <p class="login-message">{{ application.loginMessage }}</p>
+    {% endif %}
 
     {% if error %}
         <div class="alert alert-danger" role="alert">{{ error.messageKey|trans(error.messageData, 'security') }}</div>
     {% endif %}
 
-    <form method="post" action="{{ path('app_login') }}">
+    <form method="post" action="{{ preview|default(false) ? '#' : path('app_login') }}"{% if preview|default(false) %} onsubmit="return false"{% endif %}>
         <div class="field">
             <label for="username">Adresse e-mail</label>
             <input type="email" value="{{ last_username }}" name="_username" id="username" autocomplete="email" required autofocus>

@@ -113,6 +113,26 @@ php bin/console app:access:grant alice@mydomain.com app1            # donner l'a
 php bin/console app:access:grant alice@mydomain.com app1 --revoke   # retirer l'accès
 ```
 
+## Personnaliser la page de connexion d'une application
+
+Dans `/admin` → **Applications** → éditer, section **Personnalisation de la page de connexion** :
+
+- **Logo** (PNG, JPEG, WebP ou GIF, 1 Mo max ; le SVG est refusé car il peut contenir du script),
+- **Couleur principale** (boutons, liens) et **couleur de fond**,
+- **Message d'accueil** affiché sous le titre.
+
+La personnalisation s'applique aux pages de connexion, d'inscription et « accès refusé » dès que l'utilisateur
+arrive depuis cette application (le serveur retrouve l'application grâce au `client_id` de la demande
+`/authorize`). Le bouton **Aperçu de la page de connexion** montre le résultat sans se déconnecter.
+Les logos sont stockés dans `public/uploads/logos/` (volume Docker `oauth_uploads`, à sauvegarder).
+
+## Le callback (redirect URI)
+
+Le « callback » est la **redirect URI** OAuth2 : l'URL de l'application vers laquelle le serveur renvoie
+l'utilisateur après connexion, avec `?code=…&state=…`. Chaque application déclare ses redirect URIs dans
+l'admin ; toute autre URL est refusée. L'application traite ce callback en échangeant le code contre un jeton
+(voir ci-dessous).
+
 ## Brancher une application
 
 Paramètres OAuth2 à configurer dans l'application :

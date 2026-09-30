@@ -11,6 +11,9 @@
             Un seul compte pour toutes vos applications.
         {% endif %}
     </p>
+    {% if application and application.loginMessage %}
+        <p class="login-message">{{ application.loginMessage }}</p>
+    {% endif %}
 
     <div class="alert alert-info">
         Vous avez déjà un compte pour une autre application&nbsp;? Inutile de vous réinscrire&nbsp;:

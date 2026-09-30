@@ -14,6 +14,9 @@ use EasyCorp\Bundle\EasyAdminBundle\Context\AdminContext;
 use EasyCorp\Bundle\EasyAdminBundle\Controller\AbstractCrudController;
 use EasyCorp\Bundle\EasyAdminBundle\Field\AssociationField;
 use EasyCorp\Bundle\EasyAdminBundle\Field\BooleanField;
+use EasyCorp\Bundle\EasyAdminBundle\Field\ColorField;
+use EasyCorp\Bundle\EasyAdminBundle\Field\FormField;
+use EasyCorp\Bundle\EasyAdminBundle\Field\ImageField;
 use EasyCorp\Bundle\EasyAdminBundle\Field\DateTimeField;
 use EasyCorp\Bundle\EasyAdminBundle\Field\TextareaField;
 use EasyCorp\Bundle\EasyAdminBundle\Field\TextField;
@@ -25,10 +28,13 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\PasswordHasher\PasswordHasherInterface;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
+use Symfony\Component\Validator\Constraints\Image;
 
 #[IsGranted('ROLE_ADMIN')]
 class ApplicationCrudController extends AbstractCrudController
 {
+    public const LOGO_BASE_PATH = 'uploads/logos/';
+
     public function __construct(
         #[Autowire(service: 'league.oauth2_server.password_hasher')]
         private readonly PasswordHasherInterface $secretHasher,
@@ -58,8 +64,14 @@ class ApplicationCrudController extends AbstractCrudController
             ->displayIf(static fn (Application $application): bool => $application->isConfidential())
             ->askConfirmation('L\'ancien secret de « %entity_name% » cessera immédiatement de fonctionner. Continuer ?');
 
+        $preview = Action::new('previewLogin', 'Aperçu de la page de connexion', 'fa fa-eye')
+            ->linkToCrudAction('previewLogin')
+            ->setHtmlAttributes(['target' => '_blank']);
+
         return $actions
             ->add(Crud::PAGE_INDEX, Action::DETAIL)
+            ->add(Crud::PAGE_DETAIL, $preview)
+            ->add(Crud::PAGE_EDIT, $preview)
             ->add(Crud::PAGE_DETAIL, $regenerate)
             ->add(Crud::PAGE_EDIT, $regenerate);
     }
@@ -91,6 +103,27 @@ class ApplicationCrudController extends AbstractCrudController
             ->autocomplete()
             ->hideOnIndex();
         yield DateTimeField::new('createdAt', 'Créée le')->hideOnForm();
+
+        yield FormField::addFieldset('Personnalisation de la page de connexion')
+            ->setHelp('Appliquée aux pages de connexion, d\'inscription et « accès refusé » quand l\'utilisateur arrive depuis cette application.');
+        yield ImageField::new('logo', 'Logo')
+            ->setBasePath(self::LOGO_BASE_PATH)
+            ->setUploadDir('public/'.self::LOGO_BASE_PATH)
+            ->setUploadedFileNamePattern('[slug]-[contenthash].[extension]')
+            ->setFileConstraints(new Image(maxSize: '1M', mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], mimeTypesMessage: 'Formats acceptés : PNG, JPEG, WebP, GIF.'))
+            ->setHelp('PNG, JPEG, WebP ou GIF, 1 Mo maximum. Hauteur affichée : 64 px.')
+            ->setRequired(false);
+        yield ColorField::new('primaryColor', 'Couleur principale')
+            ->setHelp('Boutons et liens (couleur par défaut : #2563eb).')
+            ->setRequired(false)
+            ->hideOnIndex();
+        yield ColorField::new('backgroundColor', 'Couleur de fond')
+            ->setHelp('Fond de la page (couleur par défaut : #f3f4f6).')
+            ->setRequired(false)
+            ->hideOnIndex();
+        yield TextareaField::new('loginMessage', 'Message d\'accueil')
+            ->setHelp('Ex. « Bienvenue sur l\'intranet de l\'association ». 500 caractères max.')
+            ->hideOnIndex();
     }
 
     public function createEntity(string $entityFqcn): Application
@@ -114,6 +147,10 @@ class ApplicationCrudController extends AbstractCrudController
             ->setDescription($entityInstance->getDescription())
             ->setHomeUrl($entityInstance->getHomeUrl())
             ->setOpenRegistration($entityInstance->isOpenRegistration())
+            ->setLogo($entityInstance->getLogo())
+            ->setPrimaryColor($entityInstance->getPrimaryColor())
+            ->setBackgroundColor($entityInstance->getBackgroundColor())
+            ->setLoginMessage($entityInstance->getLoginMessage())
             ->setRedirectUris(...$entityInstance->getRedirectUris())
             ->setGrants(new Grant(OAuth2Grants::AUTHORIZATION_CODE), new Grant(OAuth2Grants::REFRESH_TOKEN))
             ->setActive($entityInstance->isActive());
@@ -141,6 +178,23 @@ class ApplicationCrudController extends AbstractCrudController
         foreach ($removed as $user) {
             $this->revoker->revokeForUser($user, $entityInstance);
         }
+    }
+
+    /**
+     * Affiche la page de connexion telle que la verront les utilisateurs de cette application.
+     */
+    #[AdminRoute('/{entityId}/preview-login', name: 'preview_login')]
+    public function previewLogin(AdminContext $context): Response
+    {
+        $application = $context->getEntity()->getInstance();
+        \assert($application instanceof Application);
+
+        return $this->render('security/login.html.twig', [
+            'last_username' => '',
+            'error' => null,
+            'application' => $application,
+            'preview' => true,
+        ]);
     }
 
     #[AdminRoute('/{entityId}/regenerate-secret', name: 'regenerate_secret')]

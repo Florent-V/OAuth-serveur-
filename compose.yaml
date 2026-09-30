@@ -12,6 +12,8 @@ services:
     volumes:
       # Clés RSA de signature des jetons (à sauvegarder !)
       - oauth_keys:/app/config/jwt
+      # Logos des applications envoyés depuis l'admin
+      - oauth_uploads:/app/public/uploads
     ports:
       # Exposé uniquement en local : votre reverse proxy HTTPS redirige oauth.mydomain.com vers ce port
       - "127.0.0.1:8080:80"
@@ -31,3 +33,4 @@ services:
 volumes:
   database_data:
   oauth_keys:
+  oauth_uploads:

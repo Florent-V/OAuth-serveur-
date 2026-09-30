@@ -8,3 +8,4 @@ config/jwt/*.pem
 public/bundles/
 .phpunit.cache
 tests/
+public/uploads/logos/*

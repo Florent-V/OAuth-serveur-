@@ -21,3 +21,8 @@
 ###> docker ###
 /.env.docker
 ###< docker ###
+
+###> uploads ###
+/public/uploads/logos/*
+!/public/uploads/logos/.gitkeep
+###< uploads ###

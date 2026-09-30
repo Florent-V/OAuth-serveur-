@@ -22,7 +22,7 @@ COPY . .
 RUN rm -f .env.local .env.*.local \
     && composer dump-autoload --no-dev --classmap-authoritative \
     && composer run-script --no-dev post-install-cmd \
-    && mkdir -p var config/jwt && chown -R www-data:www-data var config/jwt
+    && mkdir -p var config/jwt public/uploads/logos && chown -R www-data:www-data var config/jwt public/uploads
 
 COPY docker/entrypoint.sh /usr/local/bin/app-entrypoint
 RUN chmod +x /usr/local/bin/app-entrypoint

@@ -25,6 +25,7 @@
                 <li>
                     {% if application.homeUrl %}
                         <a href="{{ application.homeUrl }}">
+                            {% if application.logo %}<img src="{{ asset('uploads/logos/' ~ application.logo) }}" alt="" style="max-height:28px;vertical-align:middle;margin-right:8px">{% endif %}
                             <strong>{{ application.name }}</strong>
                             {% if application.description %}<small>{{ application.description }}</small>{% endif %}
                         </a>
