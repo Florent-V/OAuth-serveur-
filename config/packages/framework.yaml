@@ -1,0 +1,29 @@
+# see https://symfony.com/doc/current/reference/configuration/framework.html
+framework:
+    secret: '%env(APP_SECRET)%'
+    enabled_locales: ['fr']
+
+    # Derrière un reverse proxy (Traefik, Nginx, Caddy...) qui termine le HTTPS
+    trusted_proxies: '%env(TRUSTED_PROXIES)%'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-forwarded-prefix']
+
+    session:
+        name: OAUTHSESSID
+        cookie_secure: auto
+        cookie_samesite: lax
+        cookie_httponly: true
+
+    rate_limiter:
+        registration:
+            policy: sliding_window
+            limit: 5
+            interval: '1 hour'
+
+when@test:
+    framework:
+        test: true
+        session:
+            storage_factory_id: session.storage.factory.mock_file
+        rate_limiter:
+            registration:
+                policy: no_limit

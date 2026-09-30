@@ -1,0 +1,33 @@
+# Déploiement :
+#   cp .env.docker.dist .env.docker   (puis remplir les valeurs)
+#   docker compose up -d --build
+services:
+  oauth:
+    build: .
+    restart: unless-stopped
+    env_file: .env.docker
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      # Clés RSA de signature des jetons (à sauvegarder !)
+      - oauth_keys:/app/config/jwt
+    ports:
+      # Exposé uniquement en local : votre reverse proxy HTTPS redirige oauth.mydomain.com vers ce port
+      - "127.0.0.1:8080:80"
+
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env.docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - database_data:/var/lib/postgresql/data
+
+volumes:
+  database_data:
+  oauth_keys:

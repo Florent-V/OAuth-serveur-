@@ -1,0 +1,9 @@
+twig:
+    file_name_pattern: '*.twig'
+    form_themes: ['form/theme.html.twig']
+    globals:
+        site_name: '%env(SITE_NAME)%'
+
+when@test:
+    twig:
+        strict_variables: true

@@ -1,0 +1,201 @@
+# Serveur OAuth2 (SSO) – Symfony
+
+Serveur d'authentification centralisé pour vos applications auto-hébergées :
+
+```
+oauth.mydomain.com   ← ce serveur : connexion, inscription, administration
+app1.mydomain.com    ← vos applications, qui délèguent la connexion à oauth.mydomain.com
+app2.mydomain.com
+```
+
+## Principe
+
+- **Un seul compte par personne**, commun à toutes les applications (SSO : une fois connecté sur
+  `oauth.mydomain.com`, l'utilisateur passe d'une application à l'autre sans ressaisir son mot de passe).
+- **Inscription** : si quelqu'un essaie de s'inscrire (depuis n'importe quelle application) avec une
+  adresse déjà utilisée, il est redirigé vers la page de connexion avec le message
+  *« Vous êtes déjà inscrit avec cette adresse e-mail. Le même compte sert pour toutes les applications : connectez-vous. »*
+- **Contrôle d'accès par application** : un administrateur attribue des applications à chaque utilisateur.
+  Un utilisateur connecté qui ouvre une application qui ne lui est pas attribuée voit
+  *« Vous n'avez pas accès à l'application X »* et n'est pas renvoyé vers l'application.
+- Option par application **« Inscription ouverte »** : si elle est cochée, une personne qui crée son compte
+  depuis cette application y a accès immédiatement ; sinon (par défaut) un admin doit lui donner l'accès.
+- Retirer un accès (ou désactiver un compte) **révoque les jetons** en cours de l'utilisateur pour l'application.
+
+Protocole : OAuth 2.0 *Authorization Code* (+ PKCE pour les clients publics) et *Refresh Token*, basé sur
+[league/oauth2-server-bundle](https://github.com/thephpleague/oauth2-server-bundle). Les jetons d'accès sont des JWT
+signés RS256 contenant l'e-mail et le nom de l'utilisateur.
+
+## Stack
+
+- PHP 8.2+ (testé en 8.4), Symfony 7.4 LTS, Doctrine ORM, PostgreSQL 16
+- EasyAdmin 5 pour l'administration (`/admin`)
+- Docker (FrankenPHP) pour le déploiement
+
+## Pages et endpoints
+
+| URL | Rôle |
+|---|---|
+| `GET /authorize` | Point d'entrée OAuth2 (les applications y redirigent l'utilisateur) |
+| `POST /token` | Échange code → jetons, rafraîchissement (appelé par le backend de l'application) |
+| `GET /api/userinfo` | Infos de l'utilisateur (`Authorization: Bearer <access_token>`) |
+| `GET /login`, `/register` | Connexion / inscription |
+| `GET /logout?redirect_uri=…` | Déconnexion globale, puis retour vers l'application |
+| `GET /` | Portail : liste des applications de l'utilisateur |
+| `/admin` | Administration (utilisateurs, applications, accès) – rôle `ROLE_ADMIN` |
+
+## Déploiement avec Docker
+
+```bash
+git clone <ce dépôt> oauth && cd oauth
+cp .env.docker.dist .env.docker
+# Remplir .env.docker : mots de passe / secrets (openssl rand -hex 32)
+docker compose up -d --build
+
+# Premier administrateur
+docker compose exec oauth php bin/console app:user:create admin@mydomain.com "Admin" --admin
+```
+
+Au premier démarrage, le conteneur génère la paire de clés RSA (volume `oauth_keys`, **à sauvegarder** avec
+la base) et applique les migrations.
+
+Le service écoute sur `127.0.0.1:8080` ; placez-le derrière votre reverse proxy HTTPS. Exemple Nginx :
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name oauth.mydomain.com;
+    # ssl_certificate ... (Let's Encrypt)
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Port $server_port;
+    }
+}
+```
+
+Avec Caddy : `oauth.mydomain.com { reverse_proxy 127.0.0.1:8080 }`.
+
+### Installation sans Docker
+
+```bash
+composer install --no-dev --optimize-autoloader
+# Créer .env.local avec APP_ENV=prod, APP_SECRET, DATABASE_URL, OAUTH_PASSPHRASE, OAUTH_ENCRYPTION_KEY
+php bin/console league:oauth2-server:generate-keypair
+php bin/console doctrine:migrations:migrate
+php bin/console app:user:create admin@mydomain.com "Admin" --admin
+```
+
+Document root : `public/`. Pensez à une tâche cron pour purger les jetons expirés :
+`php bin/console league:oauth2-server:clear-expired-tokens`.
+
+## Déclarer une application
+
+Dans `/admin` → **Applications** → **Créer**, ou en ligne de commande :
+
+```bash
+php bin/console app:application:create "Application 1" \
+    --id=app1 \
+    --home-url=https://app1.mydomain.com \
+    --redirect-uri=https://app1.mydomain.com/oauth/callback
+```
+
+Le **client secret** n'est affiché qu'une seule fois (il est stocké haché). Il peut être régénéré depuis l'admin.
+Cochez « Client public » pour une SPA ou une application mobile (pas de secret, PKCE obligatoire).
+
+Donner l'accès : `/admin` → **Utilisateurs** → éditer → *Applications autorisées*, ou :
+
+```bash
+php bin/console app:access:grant alice@mydomain.com app1            # donner l'accès
+php bin/console app:access:grant alice@mydomain.com app1 --revoke   # retirer l'accès
+```
+
+## Brancher une application
+
+Paramètres OAuth2 à configurer dans l'application :
+
+| Paramètre | Valeur |
+|---|---|
+| Authorization URL | `https://oauth.mydomain.com/authorize` |
+| Token URL | `https://oauth.mydomain.com/token` |
+| User info URL | `https://oauth.mydomain.com/api/userinfo` |
+| Client ID / Secret | ceux affichés à la création |
+| Redirect URI | une des URI déclarées pour l'application |
+| Scopes | `profile email` |
+
+Déroulé :
+
+1. L'application redirige l'utilisateur vers
+   `https://oauth.mydomain.com/authorize?response_type=code&client_id=app1&redirect_uri=https://app1.mydomain.com/oauth/callback&scope=profile%20email&state=<aléatoire>`
+2. L'utilisateur se connecte (ou s'inscrit). S'il n'a pas accès à l'application, il voit le message
+   « Vous n'avez pas accès » et le flux s'arrête là.
+3. S'il a accès, il est renvoyé vers `redirect_uri?code=…&state=…`.
+4. Le backend de l'application échange le code :
+   ```bash
+   curl -X POST https://oauth.mydomain.com/token \
+     -d grant_type=authorization_code -d client_id=app1 -d client_secret=... \
+     -d redirect_uri=https://app1.mydomain.com/oauth/callback -d code=...
+   ```
+   → `access_token` (JWT, 1 h), `refresh_token` (1 mois).
+5. Il récupère l'utilisateur :
+   ```bash
+   curl -H "Authorization: Bearer <access_token>" https://oauth.mydomain.com/api/userinfo
+   # {"sub":"alice@mydomain.com","id":42,"name":"Alice","email":"alice@mydomain.com"}
+   ```
+   Utilisez `id` comme identifiant stable de l'utilisateur. `/api/userinfo` renvoie **403** si l'accès a été
+   retiré entre-temps. Le JWT peut aussi être vérifié localement avec la clé publique
+   (`config/jwt/public.pem`) : il contient `sub`, `uid`, `email`, `name`, `aud` (= client ID).
+
+Exemple en PHP avec [league/oauth2-client](https://oauth2-client.thephpleague.com/) :
+
+```php
+$provider = new \League\OAuth2\Client\Provider\GenericProvider([
+    'clientId'                => 'app1',
+    'clientSecret'            => '...',
+    'redirectUri'             => 'https://app1.mydomain.com/oauth/callback',
+    'urlAuthorize'            => 'https://oauth.mydomain.com/authorize',
+    'urlAccessToken'          => 'https://oauth.mydomain.com/token',
+    'urlResourceOwnerDetails' => 'https://oauth.mydomain.com/api/userinfo',
+    'scopes'                  => 'profile email',
+    'scopeSeparator'          => ' ',
+]);
+```
+
+Dans une application Symfony, [knpuniversity/oauth2-client-bundle](https://github.com/knpuniversity/oauth2-client-bundle)
+avec le provider `generic` fonctionne directement.
+
+**Déconnexion globale** : redirigez vers
+`https://oauth.mydomain.com/logout?redirect_uri=https://app1.mydomain.com/`. La redirection n'est acceptée que
+vers l'origine (schéma + domaine) d'une application déclarée.
+
+## Développement
+
+```bash
+composer install
+php bin/console league:oauth2-server:generate-keypair   # utilise OAUTH_PASSPHRASE de .env.dev
+php bin/console doctrine:schema:create                  # SQLite en dev (var/data_dev.db)
+php bin/console app:user:create admin@example.com Admin --admin
+symfony serve   # ou : php -S 127.0.0.1:8000 -t public
+```
+
+Tests (SQLite, clés générées automatiquement) :
+
+```bash
+php bin/phpunit
+```
+
+Pour lancer les tests sur PostgreSQL : `DATABASE_URL="postgresql://…/app_test?serverVersion=16" php bin/phpunit`.
+
+## Sécurité
+
+- Mots de passe hachés (bcrypt/argon2 via `auto`), secrets clients hachés.
+- Limitation des tentatives de connexion (5 / 15 min) et des inscriptions (5 / h par IP).
+- CSRF sur la connexion et les formulaires ; cookies de session `HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS.
+- Pas d'écran de consentement : les applications sont les vôtres (first-party), l'accès est décidé par l'admin.
+- Redirect URIs vérifiées strictement ; PKCE obligatoire pour les clients publics.
+
+Pistes d'évolution : réinitialisation du mot de passe par e-mail (symfony/mailer), vérification de l'adresse e-mail,
+double authentification (scheb/2fa-bundle), OpenID Connect complet (id_token, discovery).
