@@ -28,9 +28,10 @@ signés RS256 contenant l'e-mail et le nom de l'utilisateur.
 
 ## Stack
 
-- PHP 8.2+ (testé en 8.4), Symfony 7.4 LTS, Doctrine ORM, PostgreSQL 16
+- PHP 8.4, Symfony 7.4 LTS, Doctrine ORM, PostgreSQL 16
 - EasyAdmin 5 pour l'administration (`/admin`)
-- Docker (FrankenPHP) pour le déploiement
+- Docker : image [FrankenPHP](https://frankenphp.dev) (Caddy + PHP) en **mode worker**, Docker Compose, Makefile
+- Feuille de route : [ROADMAP.md](ROADMAP.md)
 
 ## Pages et endpoints
 
@@ -46,170 +47,51 @@ signés RS256 contenant l'e-mail et le nom de l'utilisateur.
 | `GET /` | Portail : liste des applications de l'utilisateur |
 | `/admin` | Administration (utilisateurs, applications, accès) – rôle `ROLE_ADMIN` |
 
-## Déploiement avec Docker
+## Docker
 
-```bash
-git clone <ce dépôt> oauth && cd oauth
-cp .env.docker.dist .env.docker
-# Remplir .env.docker : mots de passe / secrets (openssl rand -hex 32)
-docker compose up -d --build
+### Architecture
 
-# Premier administrateur
-docker compose exec oauth php bin/console app:user:create admin@mydomain.com "Admin" --admin
+```
+Internet ──HTTPS──▶ Caddy (machine hôte, certificats Let's Encrypt)
+                      │  reverse_proxy 127.0.0.1:8080
+                      ▼
+                 ┌──────────── docker compose ─────────────┐
+                 │  php       FrankenPHP (Caddy + PHP 8.4)  │
+                 │            mode worker, utilisateur app  │
+                 │     │                                     │
+                 │  database  PostgreSQL 16                 │
+                 └──────────────────────────────────────────┘
+   volumes : database_data · oauth_keys (clés RSA) · oauth_uploads (logos) · caddy_data/config
 ```
 
-Au premier démarrage, le conteneur génère la paire de clés RSA (volume `oauth_keys`, **à sauvegarder** avec
-la base) et applique les migrations.
-
-Le service écoute sur `127.0.0.1:8080` ; placez-le derrière votre reverse proxy HTTPS. Exemple Nginx :
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name oauth.mydomain.com;
-    # ssl_certificate ... (Let's Encrypt)
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Port $server_port;
-    }
-}
-```
-
-Avec Caddy : `oauth.mydomain.com { reverse_proxy 127.0.0.1:8080 }`.
-
-### Installation sans Docker
-
-```bash
-composer install --no-dev --optimize-autoloader
-# Créer .env.local avec APP_ENV=prod, APP_SECRET, DATABASE_URL, OAUTH_PASSPHRASE, OAUTH_ENCRYPTION_KEY
-php bin/console league:oauth2-server:generate-keypair
-php bin/console doctrine:migrations:migrate
-php bin/console app:user:create admin@mydomain.com "Admin" --admin
-```
-
-Document root : `public/`. Pensez à une tâche cron pour purger les jetons expirés :
-`php bin/console league:oauth2-server:clear-expired-tokens`.
-
-## Déclarer une application
-
-Dans `/admin` → **Applications** → **Créer**, ou en ligne de commande :
-
-```bash
-php bin/console app:application:create "Application 1" \
-    --id=app1 \
-    --home-url=https://app1.mydomain.com \
-    --redirect-uri=https://app1.mydomain.com/oauth/callback
-```
-
-Le **client secret** n'est affiché qu'une seule fois (il est stocké haché). Il peut être régénéré depuis l'admin.
-Cochez « Client public » pour une SPA ou une application mobile (pas de secret, PKCE obligatoire).
-
-Donner l'accès : `/admin` → **Utilisateurs** → éditer → *Applications autorisées*, ou :
-
-```bash
-php bin/console app:access:grant alice@mydomain.com app1            # donner l'accès
-php bin/console app:access:grant alice@mydomain.com app1 --revoke   # retirer l'accès
-```
-
-## Personnaliser la page de connexion d'une application
-
-Dans `/admin` → **Applications** → éditer, section **Personnalisation de la page de connexion** :
-
-- **Logo** (PNG, JPEG, WebP ou GIF, 1 Mo max ; le SVG est refusé car il peut contenir du script),
-- **Couleur principale** (boutons, liens) et **couleur de fond**,
-- **Message d'accueil** affiché sous le titre.
-
-La personnalisation s'applique aux pages de connexion, d'inscription et « accès refusé » dès que l'utilisateur
-arrive depuis cette application (le serveur retrouve l'application grâce au `client_id` de la demande
-`/authorize`). Le bouton **Aperçu de la page de connexion** montre le résultat sans se déconnecter.
-Les logos sont stockés dans `public/uploads/logos/` (volume Docker `oauth_uploads`, à sauvegarder).
-
-## Le callback (redirect URI)
-
-Le « callback » est la **redirect URI** OAuth2 : l'URL de l'application vers laquelle le serveur renvoie
-l'utilisateur après connexion, avec `?code=…&state=…`. Chaque application déclare ses redirect URIs dans
-l'admin ; toute autre URL est refusée. L'application traite ce callback en échangeant le code contre un jeton
-(voir ci-dessous).
-
-## Brancher une application
-
-Paramètres OAuth2 à configurer dans l'application :
-
-| Paramètre | Valeur |
+| Fichier | Rôle |
 |---|---|
-| Authorization URL | `https://oauth.mydomain.com/authorize` |
-| Token URL | `https://oauth.mydomain.com/token` |
-| User info URL | `https://oauth.mydomain.com/api/userinfo` |
-| Client ID / Secret | ceux affichés à la création |
-| Redirect URI | une des URI déclarées pour l'application |
-| Scopes | `profile email` |
+| `Dockerfile` | Image multi-étapes : `frankenphp_base` → `frankenphp_dev` / `frankenphp_prod` |
+| `compose.yaml` | Services communs (php + PostgreSQL), volumes |
+| `compose.override.yaml` | Dev (chargé automatiquement) : code monté, Mailpit, ports configurables |
+| `compose.prod.yaml` | Prod : image optimisée, `.env.docker`, écoute sur 127.0.0.1 uniquement |
+| `frankenphp/` | Caddyfile interne, mode worker, `php.ini`, script de démarrage |
+| `deploy/caddy/Caddyfile` | Exemple de configuration Caddy pour la machine hôte |
+| `Makefile` | Raccourcis dev et prod (`make help`) |
 
-Déroulé :
+L'image de production :
+- **mode worker FrankenPHP** : Symfony reste chargé en mémoire, quelques millisecondes par requête ;
+- dépendances sans outils de dev, autoload « classmap authoritative », `.env` compilé (`composer dump-env`),
+  cache Symfony préchauffé à la construction, OPcache sans vérification des fichiers, APCu ;
+- construction en couches (les dépendances ne sont réinstallées que si `composer.lock` change, cache Composer
+  partagé entre les builds) ;
+- exécution en **utilisateur non-root** (`app`), `no-new-privileges`, journaux Docker limités en taille ;
+- compression zstd/brotli/gzip, en-tête `Server` masqué, jetons et codes masqués dans les journaux d'accès ;
+- `HEALTHCHECK` intégré ; au démarrage : vérification des secrets obligatoires, génération des clés RSA si absentes,
+  attente de PostgreSQL, **migrations appliquées automatiquement**.
 
-1. L'application redirige l'utilisateur vers
-   `https://oauth.mydomain.com/authorize?response_type=code&client_id=app1&redirect_uri=https://app1.mydomain.com/oauth/callback&scope=profile%20email&state=<aléatoire>`
-2. L'utilisateur se connecte (ou s'inscrit). S'il n'a pas accès à l'application, il voit le message
-   « Vous n'avez pas accès » et le flux s'arrête là.
-3. S'il a accès, il est renvoyé vers `redirect_uri?code=…&state=…`.
-4. Le backend de l'application échange le code :
-   ```bash
-   curl -X POST https://oauth.mydomain.com/token \
-     -d grant_type=authorization_code -d client_id=app1 -d client_secret=... \
-     -d redirect_uri=https://app1.mydomain.com/oauth/callback -d code=...
-   ```
-   → `access_token` (JWT, 15 min par défaut), `refresh_token` (1 mois).
-5. Il récupère l'utilisateur :
-   ```bash
-   curl -H "Authorization: Bearer <access_token>" https://oauth.mydomain.com/api/userinfo
-   # {"sub":"alice@mydomain.com","id":42,"name":"Alice","email":"alice@mydomain.com"}
-   ```
-   Utilisez `id` comme identifiant stable de l'utilisateur. `/api/userinfo` renvoie **403** si l'accès a été
-   retiré entre-temps. Le JWT peut aussi être vérifié localement avec la clé publique
-   (`config/jwt/public.pem`) : il contient `sub`, `uid`, `email`, `name`, `aud` (= client ID).
-
-Exemple en PHP avec [league/oauth2-client](https://oauth2-client.thephpleague.com/) :
-
-```php
-$provider = new \League\OAuth2\Client\Provider\GenericProvider([
-    'clientId'                => 'app1',
-    'clientSecret'            => '...',
-    'redirectUri'             => 'https://app1.mydomain.com/oauth/callback',
-    'urlAuthorize'            => 'https://oauth.mydomain.com/authorize',
-    'urlAccessToken'          => 'https://oauth.mydomain.com/token',
-    'urlResourceOwnerDetails' => 'https://oauth.mydomain.com/api/userinfo',
-    'scopes'                  => 'profile email',
-    'scopeSeparator'          => ' ',
-]);
-```
-
-Dans une application Symfony, [knpuniversity/oauth2-client-bundle](https://github.com/knpuniversity/oauth2-client-bundle)
-avec le provider `generic` fonctionne directement.
-
-**Déconnexion globale** : redirigez vers
-`https://oauth.mydomain.com/logout?redirect_uri=https://app1.mydomain.com/`. La redirection n'est acceptée que
-vers l'origine (schéma + domaine) d'une application déclarée.
-
-## Développement
+### Tests
 
 ```bash
-composer install
-php bin/console league:oauth2-server:generate-keypair   # utilise OAUTH_PASSPHRASE de .env.dev
-php bin/console doctrine:schema:create                  # SQLite en dev (var/data_dev.db)
-php bin/console app:user:create admin@example.com Admin --admin
-symfony serve   # ou : php -S 127.0.0.1:8000 -t public
+make test                 # dans le conteneur de dev (SQLite)
+make test-pg              # sur la base PostgreSQL du conteneur
+php bin/phpunit           # sans Docker
 ```
-
-Tests (SQLite, clés générées automatiquement) :
-
-```bash
-php bin/phpunit
-```
-
-Pour lancer les tests sur PostgreSQL : `DATABASE_URL="postgresql://…/app_test?serverVersion=16" php bin/phpunit`.
 
 ## Double authentification (MFA) par e-mail
 
@@ -243,7 +125,7 @@ MFA_TRUSTED_DEVICE_LIFETIME=2592000 # secondes (30 jours)
 ```
 
 L'expéditeur est appliqué à tous les e-mails dans `config/packages/mailer.yaml`, qui lit ces variables.
-Pour tester l'envoi : `php bin/console mailer:test votre@adresse.fr`.
+Pour tester l'envoi : `make prod-mailtest to=votre@adresse.fr`. En dev, les e-mails arrivent dans Mailpit.
 
 ## Mot de passe oublié
 
@@ -268,8 +150,8 @@ Dans `/admin` → **Utilisateurs**, deux actions (sur la liste et la fiche) :
 | **Déconnecter partout** | Ferme immédiatement toutes ses sessions web (y compris « rester connecté »), oublie ses appareils de confiance MFA et révoque tous ses jetons OAuth2 (access et refresh). Le compte reste actif. |
 | **Bloquer immédiatement** | Idem, et désactive le compte : plus aucune connexion possible. |
 
-En ligne de commande : `php bin/console app:user:revoke alice@mydomain.com` (bloquer) ou
-`app:user:revoke alice@mydomain.com --logout-only`. Retirer une application à un utilisateur révoque aussi ses
+En ligne de commande : `make prod-revoke email=alice@mydomain.com` (bloquer), ou
+`make prod-console c="app:user:revoke alice@mydomain.com --logout-only"`. Retirer une application à un utilisateur révoque aussi ses
 jetons pour cette application.
 
 Délai d'effet côté applications : immédiat pour celles qui appellent `/api/userinfo` ou rafraîchissent leur jeton ;
@@ -292,5 +174,4 @@ pour celles qui se contentent de vérifier la signature du JWT localement, au pl
 - `APP_SECRET` doit faire **au moins 32 caractères** (il signe les cookies d'appareil de confiance) :
   `openssl rand -hex 32`.
 
-Pistes d'évolution : changement de mot de passe depuis le portail, journal d'audit des connexions,
-OpenID Connect complet (id_token, discovery).
+Prochaines fonctionnalités et idées : voir [ROADMAP.md](ROADMAP.md).

@@ -26,3 +26,7 @@
 /public/uploads/logos/*
 !/public/uploads/logos/.gitkeep
 ###< uploads ###
+
+###> docker ###
+/backups/
+###< docker ###
