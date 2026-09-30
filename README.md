@@ -41,6 +41,7 @@ signés RS256 contenant l'e-mail et le nom de l'utilisateur.
 | `GET /api/userinfo` | Infos de l'utilisateur (`Authorization: Bearer <access_token>`) |
 | `GET /login`, `/register` | Connexion / inscription |
 | `GET /2fa` | Saisie du code MFA reçu par e-mail |
+| `GET /reset-password` | Mot de passe oublié |
 | `GET /logout?redirect_uri=…` | Déconnexion globale, puis retour vers l'application |
 | `GET /` | Portail : liste des applications de l'utilisateur |
 | `/admin` | Administration (utilisateurs, applications, accès) – rôle `ROLE_ADMIN` |
@@ -244,6 +245,20 @@ MFA_TRUSTED_DEVICE_LIFETIME=2592000 # secondes (30 jours)
 L'expéditeur est appliqué à tous les e-mails dans `config/packages/mailer.yaml`, qui lit ces variables.
 Pour tester l'envoi : `php bin/console mailer:test votre@adresse.fr`.
 
+## Mot de passe oublié
+
+Lien **« Mot de passe oublié ? »** sur la page de connexion :
+
+1. L'utilisateur saisit son e-mail. La réponse est toujours la même (« si un compte existe, un e-mail a été
+   envoyé ») pour ne pas révéler quelles adresses sont inscrites ; rien n'est envoyé à un compte bloqué.
+2. Il reçoit un lien valable **1 heure**, utilisable **une seule fois** (jeton stocké haché en base).
+   Un seul e-mail par compte toutes les 15 minutes, 5 demandes par quart d'heure par IP.
+3. Il choisit un nouveau mot de passe. Par sécurité, **toutes ses sessions sont fermées**, ses appareils de
+   confiance oubliés et ses jetons OAuth2 révoqués ; il se reconnecte avec le nouveau mot de passe + un code MFA.
+
+S'il venait d'une application, il y est renvoyé après sa reconnexion (si le lien est ouvert dans le même navigateur).
+Durées réglables dans `config/packages/reset_password.yaml`.
+
 ## Révoquer un utilisateur
 
 Dans `/admin` → **Utilisateurs**, deux actions (sur la liste et la fiche) :
@@ -277,5 +292,5 @@ pour celles qui se contentent de vérifier la signature du JWT localement, au pl
 - `APP_SECRET` doit faire **au moins 32 caractères** (il signe les cookies d'appareil de confiance) :
   `openssl rand -hex 32`.
 
-Pistes d'évolution : « mot de passe oublié » par e-mail (le mailer est prêt), journal d'audit des connexions,
+Pistes d'évolution : changement de mot de passe depuis le portail, journal d'audit des connexions,
 OpenID Connect complet (id_token, discovery).
