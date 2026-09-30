@@ -4,6 +4,13 @@ namespace App\Controller\Admin;
 
 use App\Entity\User;
 use App\Service\AccessRevoker;
+use App\Service\UserRevoker;
+use EasyCorp\Bundle\EasyAdminBundle\Attribute\AdminRoute;
+use EasyCorp\Bundle\EasyAdminBundle\Config\Action;
+use EasyCorp\Bundle\EasyAdminBundle\Config\Actions;
+use EasyCorp\Bundle\EasyAdminBundle\Context\AdminContext;
+use EasyCorp\Bundle\EasyAdminBundle\Router\AdminUrlGenerator;
+use Symfony\Component\HttpFoundation\Response;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\PersistentCollection;
 use EasyCorp\Bundle\EasyAdminBundle\Config\Crud;
@@ -26,6 +33,8 @@ class UserCrudController extends AbstractCrudController
     public function __construct(
         private readonly UserPasswordHasherInterface $hasher,
         private readonly AccessRevoker $revoker,
+        private readonly UserRevoker $userRevoker,
+        private readonly AdminUrlGenerator $adminUrlGenerator,
     ) {
     }
 
@@ -41,6 +50,50 @@ class UserCrudController extends AbstractCrudController
             ->setEntityLabelInPlural('Utilisateurs')
             ->setSearchFields(['email', 'displayName'])
             ->setDefaultSort(['createdAt' => 'DESC']);
+    }
+
+    public function configureActions(Actions $actions): Actions
+    {
+        $logout = Action::new('logoutEverywhere', 'Déconnecter partout', 'fa fa-right-from-bracket')
+            ->linkToCrudAction('logoutEverywhere')
+            ->askConfirmation('Fermer toutes les sessions de « %entity_name% » et révoquer ses jetons ? Son compte reste actif, une nouvelle vérification par code lui sera demandée.');
+        $block = Action::new('block', 'Bloquer immédiatement', 'fa fa-ban')
+            ->linkToCrudAction('block')
+            ->displayIf(static fn (User $user): bool => $user->isEnabled())
+            ->addCssClass('text-danger')
+            ->askConfirmation('Bloquer « %entity_name% » ? Il est déconnecté de toutes les applications et ne peut plus se connecter.');
+
+        return $actions
+            ->add(Crud::PAGE_INDEX, $block)
+            ->add(Crud::PAGE_INDEX, $logout)
+            ->add(Crud::PAGE_EDIT, $block)
+            ->add(Crud::PAGE_EDIT, $logout);
+    }
+
+    #[AdminRoute('/{entityId}/logout-everywhere', name: 'logout_everywhere', options: ['methods' => ['GET', 'POST']])]
+    public function logoutEverywhere(AdminContext $context): Response
+    {
+        $user = $context->getEntity()->getInstance();
+        \assert($user instanceof User);
+        $this->userRevoker->logoutEverywhere($user);
+        $this->addFlash('success', \sprintf('%s a été déconnecté de partout.', $user->getEmail()));
+
+        return $this->redirect($this->adminUrlGenerator->setController(self::class)->setAction(Action::INDEX)->unset('entityId')->generateUrl());
+    }
+
+    #[AdminRoute('/{entityId}/block', name: 'block', options: ['methods' => ['GET', 'POST']])]
+    public function block(AdminContext $context): Response
+    {
+        $user = $context->getEntity()->getInstance();
+        \assert($user instanceof User);
+        if ($user === $this->getUser()) {
+            $this->addFlash('danger', 'Vous ne pouvez pas bloquer votre propre compte.');
+        } else {
+            $this->userRevoker->block($user);
+            $this->addFlash('success', \sprintf('%s est bloqué et déconnecté de toutes les applications.', $user->getEmail()));
+        }
+
+        return $this->redirect($this->adminUrlGenerator->setController(self::class)->setAction(Action::INDEX)->unset('entityId')->generateUrl());
     }
 
     public function configureFilters(Filters $filters): Filters
@@ -90,7 +143,7 @@ class UserCrudController extends AbstractCrudController
         parent::updateEntity($entityManager, $entityInstance);
 
         if (!$entityInstance->isEnabled()) {
-            $this->revoker->revokeForUser($entityInstance);
+            $this->userRevoker->logoutEverywhere($entityInstance);
         } else {
             foreach ($removed as $application) {
                 $this->revoker->revokeForUser($entityInstance, $application);
@@ -110,6 +163,8 @@ class UserCrudController extends AbstractCrudController
         $plain = $user->getPlainPassword();
         if (null !== $plain && '' !== $plain) {
             $user->setPassword($this->hasher->hashPassword($user, $plain));
+            // Nouveau mot de passe : nouvelle vérification MFA exigée sur tous les appareils
+            $user->forgetTrustedDevices();
             $user->eraseCredentials();
         }
     }

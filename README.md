@@ -40,6 +40,7 @@ signés RS256 contenant l'e-mail et le nom de l'utilisateur.
 | `POST /token` | Échange code → jetons, rafraîchissement (appelé par le backend de l'application) |
 | `GET /api/userinfo` | Infos de l'utilisateur (`Authorization: Bearer <access_token>`) |
 | `GET /login`, `/register` | Connexion / inscription |
+| `GET /2fa` | Saisie du code MFA reçu par e-mail |
 | `GET /logout?redirect_uri=…` | Déconnexion globale, puis retour vers l'application |
 | `GET /` | Portail : liste des applications de l'utilisateur |
 | `/admin` | Administration (utilisateurs, applications, accès) – rôle `ROLE_ADMIN` |
@@ -159,7 +160,7 @@ Déroulé :
      -d grant_type=authorization_code -d client_id=app1 -d client_secret=... \
      -d redirect_uri=https://app1.mydomain.com/oauth/callback -d code=...
    ```
-   → `access_token` (JWT, 1 h), `refresh_token` (1 mois).
+   → `access_token` (JWT, 15 min par défaut), `refresh_token` (1 mois).
 5. Il récupère l'utilisateur :
    ```bash
    curl -H "Authorization: Bearer <access_token>" https://oauth.mydomain.com/api/userinfo
@@ -209,13 +210,72 @@ php bin/phpunit
 
 Pour lancer les tests sur PostgreSQL : `DATABASE_URL="postgresql://…/app_test?serverVersion=16" php bin/phpunit`.
 
+## Double authentification (MFA) par e-mail
+
+À la connexion, après le mot de passe, un **code à 6 chiffres** est envoyé par e-mail (valable 10 minutes, à usage
+unique). L'utilisateur peut cocher **« Faire confiance à cet appareil »** (coché par défaut) : ce navigateur ne
+redemandera plus de code pendant `MFA_TRUSTED_DEVICE_LIFETIME` (30 jours par défaut). Un nouveau code est exigé :
+
+- sur un nouvel appareil ou navigateur, ou après expiration de la période de confiance ;
+- après un changement de mot de passe (par l'admin) ;
+- après un « Déconnecter partout » ou un blocage.
+
+À l'inscription, le code sert aussi à **vérifier l'adresse e-mail**. Protection anti-bruteforce : 5 essais par
+15 minutes (par identifiant/IP, et par compte quelle que soit l'IP), puis le code est invalidé. Renvoi de code limité
+à 3 par quart d'heure.
+
+### Configuration de l'envoi (Brevo)
+
+Variables d'environnement (`.env.docker` ou `.env.local`) :
+
+```dotenv
+# Clé API Brevo (SMTP & API > Clés API)
+MAILER_DSN=brevo+api://VOTRE_CLE_API@default
+# ou via SMTP : MAILER_DSN=brevo+smtp://LOGIN_SMTP:CLE_SMTP@default
+
+# Expéditeur : une adresse déjà validée dans Brevo
+MAILER_FROM_EMAIL=no-reply@mydomain.com
+MAILER_FROM_NAME="Mon compte"
+
+MFA_ENABLED=1                       # 0 pour désactiver la MFA
+MFA_TRUSTED_DEVICE_LIFETIME=2592000 # secondes (30 jours)
+```
+
+L'expéditeur est appliqué à tous les e-mails dans `config/packages/mailer.yaml`, qui lit ces variables.
+Pour tester l'envoi : `php bin/console mailer:test votre@adresse.fr`.
+
+## Révoquer un utilisateur
+
+Dans `/admin` → **Utilisateurs**, deux actions (sur la liste et la fiche) :
+
+| Action | Effet |
+|---|---|
+| **Déconnecter partout** | Ferme immédiatement toutes ses sessions web (y compris « rester connecté »), oublie ses appareils de confiance MFA et révoque tous ses jetons OAuth2 (access et refresh). Le compte reste actif. |
+| **Bloquer immédiatement** | Idem, et désactive le compte : plus aucune connexion possible. |
+
+En ligne de commande : `php bin/console app:user:revoke alice@mydomain.com` (bloquer) ou
+`app:user:revoke alice@mydomain.com --logout-only`. Retirer une application à un utilisateur révoque aussi ses
+jetons pour cette application.
+
+Délai d'effet côté applications : immédiat pour celles qui appellent `/api/userinfo` ou rafraîchissent leur jeton ;
+pour celles qui se contentent de vérifier la signature du JWT localement, au plus la durée de vie de l'access token
+(`OAUTH_ACCESS_TOKEN_TTL`, 15 minutes par défaut).
+
 ## Sécurité
 
 - Mots de passe hachés (bcrypt/argon2 via `auto`), secrets clients hachés.
-- Limitation des tentatives de connexion (5 / 15 min) et des inscriptions (5 / h par IP).
-- CSRF sur la connexion et les formulaires ; cookies de session `HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS.
+- MFA par e-mail avec appareils de confiance (voir plus haut).
+- Limitation des tentatives de connexion et de code MFA (5 / 15 min), des inscriptions (5 / h par IP).
+- CSRF sur la connexion, la MFA et les formulaires ; cookies de session `HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS.
+- En-têtes de sécurité : `Content-Security-Policy`, `X-Frame-Options: DENY` (anti-clickjacking),
+  `X-Content-Type-Options`, `Referrer-Policy`. **Activez HSTS sur votre reverse proxy.**
+- Révocation immédiate des sessions, access tokens courts (15 min) et refresh tokens révocables.
 - Pas d'écran de consentement : les applications sont les vôtres (first-party), l'accès est décidé par l'admin.
-- Redirect URIs vérifiées strictement ; PKCE obligatoire pour les clients publics.
+- Redirect URIs vérifiées strictement ; PKCE obligatoire pour les clients publics ; redirection après déconnexion
+  limitée aux applications déclarées.
+- Logos : formats image uniquement (SVG refusé).
+- `APP_SECRET` doit faire **au moins 32 caractères** (il signe les cookies d'appareil de confiance) :
+  `openssl rand -hex 32`.
 
-Pistes d'évolution : réinitialisation du mot de passe par e-mail (symfony/mailer), vérification de l'adresse e-mail,
-double authentification (scheb/2fa-bundle), OpenID Connect complet (id_token, discovery).
+Pistes d'évolution : « mot de passe oublié » par e-mail (le mailer est prêt), journal d'audit des connexions,
+OpenID Connect complet (id_token, discovery).

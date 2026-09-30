@@ -3,7 +3,9 @@ league_oauth2_server:
         private_key: '%env(resolve:OAUTH_PRIVATE_KEY)%'
         private_key_passphrase: '%env(OAUTH_PASSPHRASE)%'
         encryption_key: '%env(OAUTH_ENCRYPTION_KEY)%'
-        access_token_ttl: PT1H
+        # Durée de vie d'un access token (JWT). Courte = révocation plus rapide pour les applications
+        # qui valident le JWT localement sans appeler /api/userinfo.
+        access_token_ttl: '%env(OAUTH_ACCESS_TOKEN_TTL)%'
         refresh_token_ttl: P1M
         auth_code_ttl: PT10M
         require_code_challenge_for_public_clients: true

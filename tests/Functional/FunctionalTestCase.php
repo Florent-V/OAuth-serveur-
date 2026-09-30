@@ -29,6 +29,9 @@ abstract class FunctionalTestCase extends WebTestCase
         $metadata = $em->getMetadataFactory()->getAllMetadata();
         $schemaTool->dropSchema($metadata);
         $schemaTool->createSchema($metadata);
+
+        // Compteurs anti-bruteforce (clés = id utilisateur) remis à zéro entre les tests
+        static::getContainer()->get('cache.rate_limiter')->clear();
     }
 
     protected function em(): EntityManagerInterface
@@ -75,7 +78,10 @@ abstract class FunctionalTestCase extends WebTestCase
         ]);
     }
 
-    protected function login(string $email = 'alice@example.com', string $password = self::PASSWORD): void
+    /**
+     * Connexion complète : mot de passe puis, si demandé, code MFA (lu en base).
+     */
+    protected function login(string $email = 'alice@example.com', string $password = self::PASSWORD, bool $trustDevice = true): void
     {
         $crawler = $this->client->request('GET', '/login');
         $form = $crawler->selectButton('Se connecter')->form([
@@ -83,5 +89,31 @@ abstract class FunctionalTestCase extends WebTestCase
             '_password' => $password,
         ]);
         $this->client->submit($form);
+
+        // MFA demandée : le code est envoyé dès la validation du mot de passe (prepare_on_login).
+        // Comme un navigateur, on suit la redirection (vers la page demandée, qui renvoie vers /2fa).
+        if ('' !== $this->currentMfaCode($email)) {
+            if ($this->client->getResponse()->isRedirect()) {
+                $this->client->followRedirect();
+            }
+            $this->completeMfa($email, $trustDevice);
+        }
+    }
+
+    protected function completeMfa(string $email, bool $trustDevice = true, ?string $code = null): void
+    {
+        $crawler = $this->client->request('GET', '/2fa');
+        $form = $crawler->selectButton('Valider')->form(['_auth_code' => $code ?? $this->currentMfaCode($email)]);
+        if (!$trustDevice) {
+            $form['_trusted']->untick();
+        }
+        $this->client->submit($form);
+    }
+
+    protected function currentMfaCode(string $email): string
+    {
+        $this->em()->clear();
+
+        return (string) $this->em()->getRepository(User::class)->findOneBy(['email' => $email])?->getEmailAuthCode();
     }
 }

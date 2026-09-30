@@ -6,6 +6,8 @@ use App\Repository\UserRepository;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
+use Scheb\TwoFactorBundle\Model\Email\TwoFactorInterface as EmailTwoFactorInterface;
+use Scheb\TwoFactorBundle\Model\TrustedDeviceInterface;
 use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface;
 use Symfony\Component\Security\Core\User\UserInterface;
@@ -15,8 +17,11 @@ use Symfony\Component\Validator\Constraints as Assert;
 #[ORM\Table(name: '`user`')]
 #[ORM\UniqueConstraint(name: 'uniq_user_email', columns: ['email'])]
 #[UniqueEntity(fields: ['email'], message: 'Un compte existe déjà avec cette adresse e-mail.')]
-class User implements UserInterface, PasswordAuthenticatedUserInterface
+class User implements UserInterface, PasswordAuthenticatedUserInterface, EmailTwoFactorInterface, TrustedDeviceInterface
 {
+    /** Durée de validité d'un code MFA envoyé par e-mail. */
+    public const MFA_CODE_TTL = '+10 minutes';
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]
@@ -60,6 +65,25 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[ORM\InverseJoinColumn(name: 'application_id', referencedColumnName: 'identifier', onDelete: 'CASCADE')]
     #[ORM\OrderBy(['name' => 'ASC'])]
     private Collection $applications;
+
+    /** Code MFA (6 chiffres) envoyé par e-mail, et sa date d'expiration. */
+    #[ORM\Column(length: 16, nullable: true)]
+    private ?string $emailAuthCode = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $emailAuthCodeExpiresAt = null;
+
+    /**
+     * Incrémenté pour invalider tous les « appareils de confiance » (cookies MFA) de l'utilisateur.
+     */
+    #[ORM\Column(options: ['default' => 0])]
+    private int $trustedTokenVersion = 0;
+
+    /**
+     * Incrémenté pour déconnecter l'utilisateur de toutes ses sessions (web et « rester connecté »).
+     */
+    #[ORM\Column(options: ['default' => 0])]
+    private int $sessionVersion = 0;
 
     /** Mot de passe en clair, uniquement utilisé par les formulaires (jamais persisté). */
     private ?string $plainPassword = null;
@@ -218,6 +242,76 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         return false;
     }
 
+    // --- MFA par e-mail (scheb/2fa-email) ---
+
+    public function isEmailAuthEnabled(): bool
+    {
+        return true;
+    }
+
+    public function getEmailAuthRecipient(): string
+    {
+        return $this->email;
+    }
+
+    /**
+     * Retourne null si aucun code n'est en cours ou s'il a expiré : un code expiré est donc refusé.
+     */
+    public function getEmailAuthCode(): ?string
+    {
+        if (null === $this->emailAuthCode || null === $this->emailAuthCodeExpiresAt || $this->emailAuthCodeExpiresAt < new \DateTimeImmutable()) {
+            return null;
+        }
+
+        return $this->emailAuthCode;
+    }
+
+    public function setEmailAuthCode(string $authCode): void
+    {
+        $this->emailAuthCode = $authCode;
+        $this->emailAuthCodeExpiresAt = new \DateTimeImmutable(self::MFA_CODE_TTL);
+    }
+
+    public function getEmailAuthCodeExpiresAt(): ?\DateTimeImmutable
+    {
+        return $this->emailAuthCodeExpiresAt;
+    }
+
+    public function invalidateEmailAuthCode(): void
+    {
+        $this->emailAuthCode = null;
+        $this->emailAuthCodeExpiresAt = null;
+    }
+
+    public function getTrustedTokenVersion(): int
+    {
+        return $this->trustedTokenVersion;
+    }
+
+    public function getSessionVersion(): int
+    {
+        return $this->sessionVersion;
+    }
+
+    /**
+     * Invalide toutes les sessions web, les cookies « rester connecté » et les appareils de confiance MFA.
+     * (Les jetons OAuth2 sont révoqués séparément par AccessRevoker.)
+     */
+    public function invalidateAllSessions(): void
+    {
+        ++$this->sessionVersion;
+        ++$this->trustedTokenVersion;
+        $this->invalidateEmailAuthCode();
+    }
+
+    /**
+     * Nouvelle vérification MFA exigée sur tous les appareils (ex. après changement de mot de passe).
+     */
+    public function forgetTrustedDevices(): void
+    {
+        ++$this->trustedTokenVersion;
+    }
+
     public function eraseCredentials(): void
     {
         $this->plainPassword = null;
@@ -235,7 +329,7 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     {
         $data = (array) $this;
         $data["\0".self::class."\0password"] = hash('crc32c', $this->password);
-        unset($data["\0".self::class."\0plainPassword"]);
+        unset($data["\0".self::class."\0plainPassword"], $data["\0".self::class."\0emailAuthCode"]);
 
         return $data;
     }

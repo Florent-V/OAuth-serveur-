@@ -63,7 +63,7 @@
         .branded .btn:hover { filter: brightness(.9); }
     </style>
     {# Personnalisation par application (couleurs validées au format #rrggbb) #}
-    {% set brand = application|default(null) %}
+    {% set brand = application is defined ? application : pending_application() %}
     {% if brand %}
         {% set hex = '/^#[0-9a-f]{6}$/' %}
         <style>

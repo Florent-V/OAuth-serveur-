@@ -18,9 +18,21 @@ class RegistrationTest extends FunctionalTestCase
         $this->client->submit($form);
     }
 
+    /**
+     * Après l'inscription, un code est envoyé par e-mail : cela vérifie aussi que l'adresse est valide.
+     */
+    private function registerAndVerify(string $email, string $name = 'Bob'): void
+    {
+        $this->register($email, $name);
+        self::assertResponseRedirects();
+        $this->client->followRedirect();
+        self::assertResponseRedirects('/2fa');
+        $this->completeMfa(mb_strtolower($email));
+    }
+
     public function testRegistrationCreatesAccountAndLogsIn(): void
     {
-        $this->register('bob@example.com');
+        $this->registerAndVerify('bob@example.com');
 
         self::assertResponseRedirects('/');
         $user = static::getContainer()->get(UserRepository::class)->findOneByEmail('bob@example.com');
@@ -53,7 +65,7 @@ class RegistrationTest extends FunctionalTestCase
         $this->createApplication();
 
         $this->client->request('GET', $this->authorizeUrl());
-        $this->register('carol@example.com');
+        $this->registerAndVerify('carol@example.com');
         $this->client->followRedirect();
 
         self::assertResponseStatusCodeSame(403);
@@ -65,7 +77,7 @@ class RegistrationTest extends FunctionalTestCase
         $this->createApplication(openRegistration: true);
 
         $this->client->request('GET', $this->authorizeUrl());
-        $this->register('dave@example.com');
+        $this->registerAndVerify('dave@example.com');
         $this->client->followRedirect();
 
         self::assertResponseRedirects();

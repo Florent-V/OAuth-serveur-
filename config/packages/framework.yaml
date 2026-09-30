@@ -18,6 +18,16 @@ framework:
             policy: sliding_window
             limit: 5
             interval: '1 hour'
+        # Essais de code MFA par utilisateur
+        mfa_check:
+            policy: sliding_window
+            limit: 5
+            interval: '15 minutes'
+        # Renvois de code MFA par utilisateur
+        mfa_resend:
+            policy: sliding_window
+            limit: 3
+            interval: '15 minutes'
 
 when@test:
     framework:

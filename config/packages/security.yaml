@@ -42,16 +42,26 @@ security:
             remember_me:
                 secret: '%kernel.secret%'
                 lifetime: 2592000 # 30 jours
-                signature_properties: ['password', 'enabled']
+                # Tout changement de l'une de ces valeurs invalide les cookies « rester connecté »
+                signature_properties: ['password', 'enabled', 'sessionVersion']
             logout:
                 path: app_logout
                 target: app_login
+            # MFA : code à 6 chiffres par e-mail, puis « appareil de confiance » (voir scheb_2fa.yaml)
+            two_factor:
+                auth_form_path: 2fa_login
+                check_path: 2fa_login_check
+                enable_csrf: true
+                trusted_parameter_name: _trusted
+                # Envoie le code dès la validation du mot de passe
+                prepare_on_login: true
 
     role_hierarchy:
         ROLE_ADMIN: ROLE_USER
 
     access_control:
-        - { path: ^/(login|register)$, roles: PUBLIC_ACCESS }
+        - { path: ^/(login|register|logout)$, roles: PUBLIC_ACCESS }
+        - { path: ^/2fa, roles: IS_AUTHENTICATED_2FA_IN_PROGRESS }
         - { path: ^/admin, roles: ROLE_ADMIN }
         - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/authorize, roles: IS_AUTHENTICATED_REMEMBERED }
