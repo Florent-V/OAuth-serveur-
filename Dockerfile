@@ -13,8 +13,10 @@
 
 ARG FRANKENPHP_VERSION=1
 ARG PHP_VERSION=8.4
+# Version de Debian figée : une nouvelle version majeure ne doit pas arriver par surprise lors d'un build
+ARG DEBIAN_VERSION=trixie
 
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION} AS frankenphp_upstream
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION}-${DEBIAN_VERSION} AS frankenphp_upstream
 
 # ---------------------------------------------------------------------------
 # Base commune : extensions, utilisateur, configuration

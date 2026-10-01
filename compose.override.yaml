@@ -1,13 +1,17 @@
 # Développement (chargé automatiquement par « docker compose up »).
-# Ports configurables : HTTP_PORT (8080), MAILPIT_PORT (8025), DB_PORT (5432), via l'environnement ou .env.local.
+# Ports configurables : HTTP_PORT (8080), MAILPIT_PORT (8025), DB_PORT (5432), DEMO_PORT (8081),
+# via l'environnement ou .env.local.
+
+x-dev-build: &dev-build
+  context: .
+  target: frankenphp_dev
+  args:
+    APP_UID: ${APP_UID:-1000}
+    APP_GID: ${APP_GID:-1000}
+
 services:
   php:
-    build:
-      context: .
-      target: frankenphp_dev
-      args:
-        APP_UID: ${APP_UID:-1000}
-        APP_GID: ${APP_GID:-1000}
+    build: *dev-build
     image: oauth-server:dev
     volumes:
       # Code monté depuis l'hôte : les modifications sont prises en compte immédiatement
@@ -37,3 +41,27 @@ services:
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  # Application de démonstration (client OAuth2) : make demo  →  http://localhost:${DEMO_PORT:-8081}
+  demo:
+    profiles: [demo]
+    build: *dev-build
+    image: oauth-server:dev
+    entrypoint: ["php"]
+    command: ["-S", "0.0.0.0:8081", "/demo/index.php"]
+    healthcheck:
+      disable: true
+    volumes:
+      - ./examples/demo-client:/demo:ro
+      # Clé publique du serveur, pour vérifier la signature des JWT
+      - oauth_keys:/keys:ro
+    environment:
+      OAUTH_PUBLIC_URL: http://localhost:${HTTP_PORT:-8080}
+      OAUTH_INTERNAL_URL: http://php:8080
+      CLIENT_ID: demo
+      REDIRECT_URI: http://localhost:${DEMO_PORT:-8081}/callback
+      OAUTH_PUBLIC_KEY: /keys/public.pem
+    ports:
+      - "${DEMO_PORT:-8081}:8081"
+    depends_on:
+      - php

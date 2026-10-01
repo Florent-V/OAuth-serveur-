@@ -18,3 +18,5 @@ vendor/
 public/bundles/
 public/uploads/logos/*
 config/jwt/*.pem
+docs/
+examples/

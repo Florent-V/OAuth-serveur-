@@ -34,6 +34,7 @@ jobs:
       - name: Validation Composer / conteneur / Twig
         run: |
           composer validate --no-check-publish
+          composer audit
           php bin/console lint:container --env=test
           php bin/console lint:twig templates --env=test
           php bin/console lint:yaml config --env=test
@@ -82,3 +83,16 @@ jobs:
       - name: Journaux en cas d'échec
         if: failure()
         run: docker compose --env-file .env.docker -f compose.yaml -f compose.prod.yaml logs
+
+  e2e:
+    name: Test de bout en bout (environnement de dev + application de démonstration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Démarrage de l'environnement de dev
+        run: make build up
+      - name: Scénario OAuth2 complet
+        run: make test-e2e
+      - name: Journaux en cas d'échec
+        if: failure()
+        run: docker compose --profile demo logs

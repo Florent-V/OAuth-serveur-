@@ -36,7 +36,8 @@ final class CreateApplicationCommand extends Command
             ->addOption('redirect-uri', null, InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Redirect URI (répétable)')
             ->addOption('home-url', null, InputOption::VALUE_REQUIRED, 'URL de l\'application')
             ->addOption('public', null, InputOption::VALUE_NONE, 'Client public (sans secret, PKCE)')
-            ->addOption('open-registration', null, InputOption::VALUE_NONE, 'Accès automatique pour les utilisateurs qui s\'inscrivent depuis cette application');
+            ->addOption('open-registration', null, InputOption::VALUE_NONE, 'Accès automatique pour les utilisateurs qui s\'inscrivent depuis cette application')
+            ->addOption('skip-if-exists', null, InputOption::VALUE_NONE, 'Ne fait rien (sans erreur) si le client ID existe déjà');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -45,6 +46,11 @@ final class CreateApplicationCommand extends Command
 
         $identifier = (string) ($input->getOption('id') ?? bin2hex(random_bytes(16)));
         if (null !== $this->em->find(Application::class, $identifier)) {
+            if ($input->getOption('skip-if-exists')) {
+                $io->note(\sprintf('L\'application « %s » existe déjà.', $identifier));
+
+                return Command::SUCCESS;
+            }
             $io->error(\sprintf('Le client ID « %s » existe déjà.', $identifier));
 
             return Command::FAILURE;

@@ -30,14 +30,15 @@ final class AuthorizationRequestSubscriber
         $user = $event->getUser();
         $application = $event->getClient();
 
-        if ($user instanceof User && $application instanceof Application && $user->isEnabled() && $user->hasAccessTo($application)) {
+        $disabled = $application instanceof Application && !$application->isActive();
+        if (!$disabled && $user instanceof User && $application instanceof Application && $user->isEnabled() && $user->hasAccessTo($application)) {
             $event->resolveAuthorization(AuthorizationRequestResolveEvent::AUTHORIZATION_APPROVED);
 
             return;
         }
 
         $event->setResponse(new Response(
-            $this->twig->render('oauth/no_access.html.twig', ['application' => $application]),
+            $this->twig->render('oauth/no_access.html.twig', ['application' => $application, 'disabled' => $disabled]),
             Response::HTTP_FORBIDDEN,
         ));
     }

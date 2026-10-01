@@ -9,24 +9,31 @@ export
 HTTP_PORT    ?= 8080
 MAILPIT_PORT ?= 8025
 DB_PORT      ?= 5432
+DEMO_PORT    ?= 8081
 APP_UID      ?= $(shell id -u)
 APP_GID      ?= $(shell id -g)
 
 DOCKER_COMP  = docker compose
-PHP_CONT     = $(DOCKER_COMP) exec php
+# Pas de pseudo-terminal quand make ne tourne pas dans un terminal (CI, cron, redirection)
+TTY          := $(shell [ -t 0 ] || echo -T)
+PHP_CONT     = $(DOCKER_COMP) exec $(TTY) php
 CONSOLE      = $(PHP_CONT) php bin/console
 
 # Production : fichiers compose + variables dans .env.docker
 PROD_ENV     = .env.docker
 PROD_COMP    = docker compose --env-file $(PROD_ENV) -f compose.yaml -f compose.prod.yaml
-PROD_CONSOLE = $(PROD_COMP) exec php php bin/console
+PROD_CONSOLE = $(PROD_COMP) exec $(TTY) php php bin/console
 BACKUP_DIR   = backups
+
+# Test de bout en bout (tests/e2e/oauth-flow.sh) : console et lecture du code MFA en base
+E2E_CONSOLE  = $(DOCKER_COMP) exec -T php php bin/console
+E2E_SQL      = $(DOCKER_COMP) exec -T database sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc "$$0"' "$$1"
 
 .DEFAULT_GOAL := help
 .PHONY: help build up start down restart logs sh bash composer console cc migrate migration \
-        test test-pg admin grant revoke db mails fix-perms \
+        test test-pg test-e2e admin grant revoke db mails demo demo-down public-key fix-perms \
         prod-check prod-build prod-up prod-down prod-restart prod-logs prod-ps prod-sh prod-console \
-        prod-migrate prod-admin prod-app prod-grant prod-revoke prod-mailtest prod-purge-tokens \
+        prod-migrate prod-admin prod-app prod-grant prod-revoke prod-mailtest prod-public-key prod-purge-tokens \
         prod-backup prod-restore prod-deploy
 
 ## —— Aide ——————————————————————————————————————————————————————————————
@@ -46,7 +53,7 @@ up: ## Démarre l'environnement de dev (http://localhost:HTTP_PORT, e-mails sur 
 start: build up ## Construit puis démarre
 
 down: ## Arrête l'environnement de dev
-	@$(DOCKER_COMP) down --remove-orphans
+	@$(DOCKER_COMP) --profile demo down --remove-orphans
 
 restart: down up ## Redémarre
 
@@ -78,6 +85,13 @@ test-pg: ## Lance les tests sur la base PostgreSQL du conteneur (base app_test)
 	@$(DOCKER_COMP) exec database sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tc "SELECT 1 FROM pg_database WHERE datname = '"'"'app_test'"'"'" | grep -q 1 || createdb -U "$$POSTGRES_USER" app_test'
 	@$(DOCKER_COMP) exec -e DATABASE_URL="postgresql://$${POSTGRES_USER:-app}:$${POSTGRES_PASSWORD:-!ChangeMe!}@database:5432/app_test?serverVersion=16&charset=utf8" php php bin/phpunit $(c)
 
+test-e2e: ## Test de bout en bout via l'application de démonstration (environnement de dev démarré)
+	@$(eval E2E_EMAIL := e2e-$(shell date +%s)@example.test)
+	@$(CONSOLE) app:user:create $(E2E_EMAIL) "Test E2E" --password=E2e-password-123456 -q
+	@$(MAKE) --no-print-directory demo email=$(E2E_EMAIL) > /dev/null
+	@sleep 1
+	@tests/e2e/oauth-flow.sh http://localhost:$(HTTP_PORT) http://localhost:$(DEMO_PORT) $(E2E_EMAIL) E2e-password-123456
+
 admin: ## Crée un administrateur, ex. make admin email=moi@example.com
 	@$(CONSOLE) app:user:create $(email) --admin
 
@@ -86,6 +100,19 @@ grant: ## Donne l'accès à une application, ex. make grant email=... app=app1
 
 revoke: ## Bloque un utilisateur, ex. make revoke email=...
 	@$(CONSOLE) app:user:revoke $(email)
+
+demo: ## Application de démonstration (http://localhost:DEMO_PORT), ex. make demo email=moi@example.com
+	@$(CONSOLE) app:application:create "Démo" --id=demo --public --open-registration --skip-if-exists \
+		--home-url=http://localhost:$(DEMO_PORT)/ --redirect-uri=http://localhost:$(DEMO_PORT)/callback
+	@if [ -n "$(email)" ]; then $(CONSOLE) app:access:grant $(email) demo; fi
+	@$(DOCKER_COMP) --profile demo up --detach demo
+	@echo "Démo : http://localhost:$(DEMO_PORT)  (application « demo », inscription ouverte)"
+
+demo-down: ## Arrête l'application de démonstration
+	@$(DOCKER_COMP) --profile demo stop demo
+
+public-key: ## Affiche la clé publique de signature des JWT (pour les applications)
+	@$(DOCKER_COMP) exec -T php cat config/jwt/public.pem
 
 db: ## Client psql sur la base de dev
 	@$(DOCKER_COMP) exec database sh -c 'psql -U "$$POSTGRES_USER" "$$POSTGRES_DB"'
@@ -146,6 +173,9 @@ prod-revoke: prod-check ## Bloque un utilisateur et le déconnecte partout, ex. 
 
 prod-mailtest: prod-check ## Envoie un e-mail de test via Brevo, ex. make prod-mailtest to=moi@mydomain.com
 	@$(PROD_CONSOLE) mailer:test $(to)
+
+prod-public-key: prod-check ## Clé publique de signature des JWT, ex. make prod-public-key > oauth-public.pem
+	@$(PROD_COMP) exec -T php cat config/jwt/public.pem
 
 prod-purge-tokens: prod-check ## Supprime les jetons expirés (à planifier en cron)
 	@$(PROD_COMP) exec -T php php bin/console league:oauth2-server:clear-expired-tokens

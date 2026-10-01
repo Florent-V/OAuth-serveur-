@@ -33,6 +33,7 @@ reflète la priorité suggérée.
   son mot de passe via le lien.
 - [ ] **Demandes d'accès** : depuis la page « Vous n'avez pas accès », bouton « Demander l'accès » → notification
   à l'admin → validation en un clic.
+- [ ] **Fermer l'inscription libre** (option globale) : comptes créés uniquement par l'admin ou sur invitation.
 - [ ] **Notification à l'admin** lors d'une nouvelle inscription.
 - [ ] **Groupes** d'utilisateurs (ex. « Famille », « Équipe ») auxquels on attribue des applications.
 - [ ] **Rôles par application** (ex. `app1: editor`) transmis dans le jeton et `/api/userinfo`.
@@ -48,7 +49,8 @@ reflète la priorité suggérée.
 - [ ] **Introspection** (RFC 7662) et **révocation** (RFC 7009) de jetons pour les applications.
 - [ ] **Déconnexion back-channel** (OIDC Back-Channel Logout) : prévenir les applications quand l'utilisateur
   se déconnecte ou est révoqué.
-- [ ] **CORS** configurable par application (pour les SPA qui appellent `/token` depuis le navigateur).
+- [ ] **CORS** configurable par application (pour les SPA sans backend qui appellent `/token` depuis le navigateur ;
+  en attendant, passer par un petit backend, voir docs/integrer-une-application.md).
 - [ ] **Consentement optionnel** par application (pour des applications tierces).
 - [ ] **Forward auth** (Caddy `forward_auth`, Traefik) : protéger une application qui ne gère pas OAuth2
   directement au niveau du reverse proxy.
