@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -64,9 +65,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Taille de l'image
-        run: docker image ls oauth-server:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+        run: |
+          docker image ls oauth-server:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+          docker history oauth-server:ci --format '{{.Size}}\t{{.CreatedBy}}' | grep -v '^0B' | cut -c1-100
+          docker run --rm --entrypoint sh oauth-server:ci -c '
+            du -xsh /usr/local /usr/lib /usr/share /app/vendor 2>/dev/null
+            echo "--- plus gros paquets (Ko)"; dpkg-query -Wf "\${Installed-Size}\t\${Package}\n" | sort -n | tail -15'
+      # --entrypoint : la simple validation ne doit pas passer par le script de démarrage (secrets, base…)
       - name: Validation du Caddyfile
-        run: docker run --rm oauth-server:ci frankenphp validate --config /etc/frankenphp/Caddyfile
+        run: docker run --rm --entrypoint frankenphp oauth-server:ci validate --config /etc/frankenphp/Caddyfile
       - name: Démarrage de la stack de prod
         run: |
           cp .env.docker.dist .env.docker
@@ -82,7 +89,7 @@ jobs:
           curl -fsS -o /dev/null -w "GET /login -> %{http_code}\n" http://127.0.0.1:8080/login
       - name: Journaux en cas d'échec
         if: failure()
-        run: docker compose --env-file .env.docker -f compose.yaml -f compose.prod.yaml logs
+        run: test -f .env.docker && docker compose --env-file .env.docker -f compose.yaml -f compose.prod.yaml logs || true
 
   e2e:
     name: Test de bout en bout (environnement de dev + application de démonstration)
