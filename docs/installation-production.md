@@ -178,7 +178,7 @@ applications est décrite dans [Administration](administration.md).
 
 ## À propos de l'image Docker
 
-L'image de production (≈ 300 Mo) est construite en plusieurs étapes : les dépendances et le cache Symfony sont
+L'image de production (≈ 275 Mo, contre 835 Mo pour l'image FrankenPHP de départ) est construite en plusieurs étapes : les dépendances et le cache Symfony sont
 préparés dans une étape intermédiaire, puis seuls PHP, FrankenPHP et l'application sont copiés dans l'image finale,
 **sans compilateurs ni outils** (Composer, PECL, Perl…). Le code y est en lecture seule ; seuls `var/`, les clés et
 les logos sont modifiables, par un utilisateur non-root. FrankenPHP tourne en **mode worker** : l'application reste
