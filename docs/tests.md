@@ -91,9 +91,10 @@ Les e-mails arrivent dans Mailpit (<http://localhost:8025>).
 | **Tests** | `composer validate` et `composer audit` (failles connues), lint du conteneur, des templates et du YAML, tests sur SQLite, migrations et tests sur PostgreSQL 16 |
 | **Image Docker (prod)** | construction de l'image de production, taille, validation du Caddyfile, démarrage de la stack de production complète |
 | **Test de bout en bout** | environnement de dev + application de démonstration + `make test-e2e` |
+| **Exemple Nuxt** | vérification des types et build de `examples/nuxt-client` (testé de bout en bout lors de son écriture, voir le [guide d'intégration](integrer-une-application.md#nuxt-ssr)) |
 
 Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour de l'image de base, des dépendances
-PHP et des actions GitHub ; la CI les valide avant fusion.
+PHP, de l'exemple Nuxt et des actions GitHub ; la CI les valide avant fusion.
 
 ## Écrire un test
 

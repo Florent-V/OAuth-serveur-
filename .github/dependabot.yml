@@ -16,3 +16,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: npm
+    directory: /examples/nuxt-client
+    schedule:
+      interval: weekly
+    groups:
+      nuxt:
+        patterns: ["*"]
