@@ -113,15 +113,18 @@ RUN rm -rf frankenphp deploy tests \
 # ---------------------------------------------------------------------------
 FROM frankenphp_base AS frankenphp_system
 
+# Méthode de l'image PHP officielle : tous les paquets sont marqués « automatiques », puis seuls ceux dont
+# PHP, FrankenPHP et les extensions ont réellement besoin (d'après ldd) sont conservés ; le reste
+# (compilateurs, outils de construction, Perl…) est supprimé, quel que soit l'historique d'installation.
 RUN set -eux; \
-    # Marque comme indispensables les paquets dont dépendent réellement PHP, FrankenPHP et les extensions
+    apt-mark auto '.*' > /dev/null; \
+    # ca-certificates (HTTPS sortant : Brevo), curl (healthcheck), media-types (/etc/mime.types pour Caddy)
+    apt-mark manual ca-certificates curl media-types > /dev/null; \
     find /usr/local -type f \( -perm /0111 -o -name '*.so*' \) -exec ldd '{}' ';' 2>/dev/null \
         | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); print "*" so }' \
-        | sort -u | xargs -r dpkg-query --search 2>/dev/null | grep -v '^diversion' | cut -d: -f1 | sort -u | xargs -r apt-mark manual > /dev/null; \
-    # Supprime les compilateurs et outils de construction, ainsi que Perl (tiré par mailcap ;
-    # seul /etc/mime.types, fourni par media-types, sert à Caddy pour les types de fichiers)
-    apt-mark manual media-types > /dev/null; \
-    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false $PHPIZE_DEPS libc6-dev mailcap perl; \
+        | sort -u | xargs -r dpkg-query --search 2>/dev/null | grep -v '^diversion' | cut -d: -f1 | sort -u \
+        | xargs -r apt-mark manual > /dev/null; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
     rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/* /tmp/* /root/.composer \
         /usr/src/* /usr/local/include /usr/local/php /usr/local/lib/php/build /usr/local/lib/php/test \
         /usr/local/lib/php/doc /usr/local/lib/php/.registry /usr/local/lib/php/.channels \
@@ -132,9 +135,16 @@ RUN set -eux; \
         /usr/local/bin/docker-php-source /usr/local/bin/pear* /usr/local/bin/pecl /usr/local/bin/phar* \
         /usr/local/bin/php-cgi /usr/local/bin/phpdbg /usr/local/bin/phpize /usr/local/bin/php-config \
         /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/lintian /app/public/index.php; \
-    # Vérification : aucune bibliothèque manquante
-    ! find /usr/local -type f \( -perm /0111 -o -name '*.so*' \) -exec ldd '{}' ';' 2>/dev/null | grep 'not found'; \
-    test -s /etc/mime.types; frankenphp version; php -m > /dev/null; \
+    # Vérifications (le build échoue si l'une d'elles ne passe pas)
+    if find /usr/local -type f \( -perm /0111 -o -name '*.so*' \) -exec ldd '{}' ';' 2>/dev/null | grep 'not found'; then \
+        echo 'Bibliothèque manquante' >&2; exit 1; \
+    fi; \
+    for tool in gcc cc c++ cpp ld make; do \
+        if command -v "$tool"; then echo "Outil de construction encore présent : $tool" >&2; exit 1; fi; \
+    done; \
+    # (perl-base, paquet essentiel de Debian utilisé par dpkg, reste ; le paquet perl complet, non)
+    if dpkg -s perl > /dev/null 2>&1; then echo 'Paquet perl encore présent' >&2; exit 1; fi; \
+    test -s /etc/mime.types; command -v curl; frankenphp version; php -m > /dev/null; \
     # Le binaire php (21 Mo) fait doublon avec PHP intégré à FrankenPHP : « php » devient un raccourci
     printf '#!/bin/sh\nexec frankenphp php-cli "$@"\n' > /usr/local/bin/php; \
     echo '<?php echo PHP_SAPI;' > /tmp/sapi.php; test "$(php /tmp/sapi.php)" = cli; rm /tmp/sapi.php
