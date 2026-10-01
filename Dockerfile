@@ -1,18 +1,25 @@
 # syntax=docker/dockerfile:1
 #
 # Image FrankenPHP (Caddy + PHP 8.4 ZTS) multi-étapes :
-#   - frankenphp_dev  : développement (code monté en volume, Xdebug disponible, rechargement auto)
-#   - frankenphp_prod : production (dépendances sans dev, autoload optimisé, mode worker, utilisateur non-root)
+#
+#   frankenphp_upstream ─▶ frankenphp_base ─┬─▶ frankenphp_dev     développement (outils, Xdebug, code monté)
+#                                           ├─▶ frankenphp_build   construit l'application (Composer, cache)
+#                                           └─▶ frankenphp_system  PHP + FrankenPHP sans compilateurs ni outils
+#                                                       │
+#   scratch ◀── système aplati ─────────────────────────┘
+#      └─▶ frankenphp_prod : système + application (code en lecture seule, utilisateur non-root, mode worker)
 #
 # Construction : make build (dev) / make prod-build (prod)
 
 ARG FRANKENPHP_VERSION=1
 ARG PHP_VERSION=8.4
 
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION} AS frankenphp_upstream
+
 # ---------------------------------------------------------------------------
-# Base commune
+# Base commune : extensions, utilisateur, configuration
 # ---------------------------------------------------------------------------
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION} AS frankenphp_base
+FROM frankenphp_upstream AS frankenphp_base
 
 # UID/GID de l'utilisateur applicatif (en dev, alignés sur l'utilisateur de la machine hôte)
 ARG APP_UID=1000
@@ -29,10 +36,9 @@ RUN install-php-extensions \
         pdo_pgsql \
         zip
 
-# Utilisateur non-root ; FrankenPHP garde le droit d'écouter sur un port < 1024 si besoin
+# Utilisateur non-root
 RUN groupadd --gid "${APP_GID}" app \
     && useradd --uid "${APP_UID}" --gid app --create-home --shell /bin/sh app \
-    && setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/frankenphp \
     && mkdir -p /data/caddy /config/caddy /app/config/jwt /app/public/uploads/logos \
     # (les volumes nommés héritent de ces propriétaires à leur création)
     && chown -R app:app /data /config /app
@@ -74,35 +80,105 @@ USER app
 CMD ["frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile", "--watch"]
 
 # ---------------------------------------------------------------------------
-# Production
+# Construction de l'application (étape intermédiaire, absente de l'image finale)
 # ---------------------------------------------------------------------------
-FROM frankenphp_base AS frankenphp_prod
+FROM frankenphp_base AS frankenphp_build
 
 ENV APP_ENV=prod \
-    APP_DEBUG=0 \
-    # Mode worker : l'application Symfony reste chargée en mémoire entre les requêtes
-    FRANKENPHP_CONFIG="import worker.Caddyfile"
-
-RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
-
-COPY --link frankenphp/conf.d/20-app.prod.ini $PHP_INI_DIR/app.conf.d/
-COPY --link frankenphp/worker.Caddyfile /etc/frankenphp/worker.Caddyfile
+    APP_DEBUG=0
 
 # 1) Dépendances seules (couche mise en cache tant que composer.lock ne change pas)
 COPY --link composer.json composer.lock symfony.lock ./
 RUN --mount=type=cache,target=/root/.composer/cache \
     composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-progress --no-interaction
 
-# 2) Code de l'application
+# 2) Code de l'application, autoload optimisé, .env compilé, cache préchauffé, assets
 COPY --link . ./
 RUN rm -rf frankenphp deploy tests \
+    # (si Composer a dû cloner un paquet au lieu de télécharger l'archive)
+    && find vendor -name .git -type d -prune -exec rm -rf {} + \
     && mkdir -p var/cache var/log var/share config/jwt public/uploads/logos \
     && composer dump-autoload --no-dev --classmap-authoritative \
-    # Compile les .env en .env.local.php (plus rapide ; les vraies variables d'environnement restent prioritaires)
+    # Compile les .env en .env.local.php (les vraies variables d'environnement restent prioritaires)
     && composer dump-env prod \
     && composer run-script --no-dev post-install-cmd \
-    && chmod +x bin/console \
-    && chown -R app:app var config/jwt public/uploads \
-    && sync
+    && rm -rf var/log/* \
+    && chmod +x bin/console
+
+# ---------------------------------------------------------------------------
+# Système de production : la base, débarrassée de tout ce qui ne sert qu'à construire
+# (l'image PHP officielle conserve gcc, g++, make… : ~370 Mo)
+# ---------------------------------------------------------------------------
+FROM frankenphp_base AS frankenphp_system
+
+RUN set -eux; \
+    # Marque comme indispensables les paquets dont dépendent réellement PHP, FrankenPHP et les extensions
+    find /usr/local -type f \( -perm /0111 -o -name '*.so*' \) -exec ldd '{}' ';' 2>/dev/null \
+        | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); print "*" so }' \
+        | sort -u | xargs -r dpkg-query --search 2>/dev/null | grep -v '^diversion' | cut -d: -f1 | sort -u | xargs -r apt-mark manual > /dev/null; \
+    # Supprime les compilateurs et outils de construction, ainsi que Perl (tiré par mailcap ;
+    # seul /etc/mime.types, fourni par media-types, sert à Caddy pour les types de fichiers)
+    apt-mark manual media-types > /dev/null; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false $PHPIZE_DEPS libc6-dev mailcap perl; \
+    rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/* /tmp/* /root/.composer \
+        /usr/src/* /usr/local/include /usr/local/php /usr/local/lib/php/build /usr/local/lib/php/test \
+        /usr/local/lib/php/doc /usr/local/lib/php/.registry /usr/local/lib/php/.channels \
+        /usr/local/lib/php/PEAR* /usr/local/lib/php/Archive /usr/local/lib/php/Console /usr/local/lib/php/OS \
+        /usr/local/lib/php/Structures /usr/local/lib/php/XML /usr/local/lib/php/pearcmd.php /usr/local/lib/php/peclcmd.php \
+        /usr/local/lib/libwatcher-c.a \
+        /usr/local/bin/composer /usr/local/bin/install-php-extensions /usr/local/bin/docker-php-ext-* \
+        /usr/local/bin/docker-php-source /usr/local/bin/pear* /usr/local/bin/pecl /usr/local/bin/phar* \
+        /usr/local/bin/php-cgi /usr/local/bin/phpdbg /usr/local/bin/phpize /usr/local/bin/php-config \
+        /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/lintian /app/public/index.php; \
+    # Vérification : aucune bibliothèque manquante
+    ! find /usr/local -type f \( -perm /0111 -o -name '*.so*' \) -exec ldd '{}' ';' 2>/dev/null | grep 'not found'; \
+    test -s /etc/mime.types; frankenphp version; php -m > /dev/null; \
+    # Le binaire php (21 Mo) fait doublon avec PHP intégré à FrankenPHP : « php » devient un raccourci
+    printf '#!/bin/sh\nexec frankenphp php-cli "$@"\n' > /usr/local/bin/php; \
+    echo '<?php echo PHP_SAPI;' > /tmp/sapi.php; test "$(php /tmp/sapi.php)" = cli; rm /tmp/sapi.php
+
+# ---------------------------------------------------------------------------
+# Production : image finale aplatie (une couche système, une couche application)
+# ---------------------------------------------------------------------------
+FROM scratch AS frankenphp_prod
+
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+COPY --from=frankenphp_system / /
+
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PHP_INI_DIR=/usr/local/etc/php \
+    PHP_INI_SCAN_DIR=":/usr/local/etc/php/app.conf.d" \
+    XDG_CONFIG_HOME=/config \
+    XDG_DATA_HOME=/data \
+    GODEBUG=cgocheck=0 \
+    SERVER_NAME=":8080" \
+    APP_ENV=prod \
+    APP_DEBUG=0 \
+    # Mode worker : l'application Symfony reste chargée en mémoire entre les requêtes
+    FRANKENPHP_CONFIG="import worker.Caddyfile"
+
+WORKDIR /app
+
+# Configuration PHP / Caddy de production
+COPY --link frankenphp/conf.d/20-app.prod.ini /usr/local/etc/php/app.conf.d/
+COPY --link frankenphp/worker.Caddyfile /etc/frankenphp/worker.Caddyfile
+RUN mv /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini \
+    && rm /usr/local/etc/php/php.ini-development
+
+# Code en lecture seule (root) ; seuls var/, les clés et les logos sont modifiables par l'utilisateur app
+COPY --link --from=frankenphp_build /app /app
+COPY --link --from=frankenphp_build --chown=${APP_UID}:${APP_GID} /app/var /app/var
+COPY --link --from=frankenphp_build --chown=${APP_UID}:${APP_GID} /app/config/jwt /app/config/jwt
+COPY --link --from=frankenphp_build --chown=${APP_UID}:${APP_GID} /app/public/uploads /app/public/uploads
+
+EXPOSE 8080
+
+HEALTHCHECK --start-period=60s --interval=30s --timeout=5s \
+    CMD curl -fsS http://localhost:2019/metrics > /dev/null || exit 1
 
 USER app
+
+ENTRYPOINT ["docker-entrypoint"]
+CMD ["frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"]

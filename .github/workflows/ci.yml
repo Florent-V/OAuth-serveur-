@@ -62,6 +62,8 @@ jobs:
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Taille de l'image
+        run: docker image ls oauth-server:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}'
       - name: Validation du Caddyfile
         run: docker run --rm oauth-server:ci frankenphp validate --config /etc/frankenphp/Caddyfile
       - name: Démarrage de la stack de prod
