@@ -31,7 +31,7 @@ jobs:
           php-version: '8.4'
           extensions: intl, pdo_pgsql, pdo_sqlite, zip, gd
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@v4
       - name: Validation Composer / conteneur / Twig
         run: |
           composer validate --no-check-publish
