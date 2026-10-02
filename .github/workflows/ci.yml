@@ -25,7 +25,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U app" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
@@ -53,7 +53,7 @@ jobs:
     name: Image Docker (prod)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - name: Build
         uses: docker/build-push-action@v7
@@ -95,7 +95,7 @@ jobs:
     name: Test de bout en bout (environnement de dev + application de démonstration)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Démarrage de l'environnement de dev
         run: make build up
       - name: Scénario OAuth2 complet
@@ -111,7 +111,7 @@ jobs:
       run:
         working-directory: examples/nuxt-client
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
