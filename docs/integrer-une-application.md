@@ -5,8 +5,13 @@
 Ce guide s'adresse au **développeur d'une application** qui veut déléguer la connexion de ses utilisateurs au
 serveur (`https://oauth.mydomain.com` dans les exemples). Il ne suppose aucune connaissance préalable d'OAuth2.
 
-Le serveur parle **OAuth 2.0** standard (flux *Authorization Code* avec PKCE, *Refresh Token*) : toute
-bibliothèque OAuth2 générique convient.
+Le serveur parle **OAuth 2.0** standard (flux *Authorization Code* avec PKCE, *Refresh Token*) et
+**OpenID Connect Back-Channel Logout** : toute bibliothèque OAuth2 générique convient.
+
+> Avant d'écrire du code : les règles à respecter sont dans
+> [Architecture d'une application cliente](architecture-application-cliente.md), et la mise en œuvre pas à pas
+> (Nuxt SSR, Nuxt + Python, HTML/JS + Python, cas général, migration depuis Casdoor) dans
+> [Adapter une application](adapter-une-application.md). Ce guide-ci est la référence du protocole.
 
 ## Sommaire
 
@@ -16,10 +21,11 @@ bibliothèque OAuth2 générique convient.
 4. [Identifier l'utilisateur](#4-identifier-lutilisateur)
 5. [Garder l'utilisateur connecté : session et renouvellement](#5-garder-lutilisateur-connecté--session-et-renouvellement)
 6. [Déconnexion](#6-déconnexion)
-7. [Exemples de code](#7-exemples-de-code) : PHP, Symfony, Node.js, **Nuxt (SSR)**, Python, Grafana
-8. [Tester son intégration](#8-tester-son-intégration)
-9. [Erreurs fréquentes](#9-erreurs-fréquentes)
-10. [Liste de contrôle avant la mise en production](#10-liste-de-contrôle-avant-la-mise-en-production)
+7. [Back-channel logout : déconnexion immédiate](#7-back-channel-logout--déconnexion-immédiate)
+8. [Exemples de code](#8-exemples-de-code) : PHP, Symfony, Node.js, Nuxt, Python, Grafana
+9. [Tester son intégration](#9-tester-son-intégration)
+10. [Erreurs fréquentes](#10-erreurs-fréquentes)
+11. [Liste de contrôle avant la mise en production](#11-liste-de-contrôle-avant-la-mise-en-production)
 
 ## 1. Ce qu'il vous faut
 
@@ -35,7 +41,7 @@ Indiquez-lui :
 |---|---|---|
 | Site ou API avec un **backend** (PHP, Node, Python, Java…) — cas le plus courant | **Confidentiel** | client ID + **client secret** |
 | Application **mobile** ou **de bureau** (le code est chez l'utilisateur) | **Public** | client ID seul ; **PKCE obligatoire** |
-| Application JavaScript **avec rendu serveur** (Nuxt SSR, Next.js, SvelteKit, Remix…) | **Confidentiel** | client ID + **client secret**, utilisés uniquement par la partie serveur. Voir l'[exemple Nuxt](#nuxt-ssr). |
+| Application JavaScript **avec rendu serveur** (Nuxt SSR, Next.js, SvelteKit, Remix…) | **Confidentiel** | client ID + **client secret**, utilisés uniquement par la partie serveur. Voir [Adapter une application](adapter-une-application.md#1-nuxt-ssr). |
 | Application **JavaScript sans backend** (SPA pure, site statique) | — | Pas encore possible directement (le serveur n'envoie pas d'en-têtes CORS). Ajoutez un petit backend (*BFF*) en client confidentiel — un framework avec rendu serveur comme Nuxt fait exactement cela. |
 
 Vous recevez un **client ID** (ex. `app1`) et, pour un client confidentiel, un **client secret**. Le secret est
@@ -60,6 +66,8 @@ même connecté, vous verrez « Vous n'avez pas accès à l'application ».
 | Access token | JWT signé **RS256**, valable **15 minutes** |
 | Refresh token | valable **1 mois**, **à usage unique** (un nouveau est fourni à chaque renouvellement) |
 | Clé publique (vérification des JWT) | fournie par l'administrateur (`make prod-public-key`) |
+| Back-channel logout | `POST` d'un *logout token* (JWT RS256) vers l'URL déclarée pour l'application ([section 7](#7-back-channel-logout--déconnexion-immédiate)) |
+| Émetteur (`iss` des logout tokens) | l'URL publique du serveur, ex. `https://oauth.mydomain.com` |
 
 Il n'y a pas (encore) de découverte OpenID Connect (`/.well-known/openid-configuration`) ni d'`id_token` : configurez
 les URL ci-dessus à la main. Voir la [feuille de route](../ROADMAP.md).
@@ -245,7 +253,11 @@ Si le renouvellement échoue (`400 invalid_grant` : refresh token expiré ou ré
 « déconnecter partout »), **fermez la session locale** et renvoyez l'utilisateur vers la connexion.
 
 Stratégie simple et sûre : à chaque requête, si l'access token a expiré, le renouveler ; en cas d'échec,
-déconnecter. Vous respectez ainsi les révocations faites par l'administrateur sous 15 minutes au plus.
+déconnecter. Vous respectez ainsi les révocations faites par l'administrateur sous 15 minutes au plus, même sans
+back-channel logout. Deux requêtes simultanées ne doivent pas renouveler le même refresh token (la seconde serait
+refusée) : partagez un renouvellement en cours ([architecture, règle 4](architecture-application-cliente.md#4-session-de-lapplication-liée-au-jeton--renouvellement-et-refus-couche-1)).
+
+Pour une coupure en quelques secondes, ajoutez le back-channel logout ([section 7](#7-back-channel-logout--déconnexion-immédiate)).
 
 Si l'utilisateur revient après la fin de votre session, redirigez-le simplement vers `/authorize` : s'il est
 encore connecté sur le serveur, il revient aussitôt sans rien saisir (SSO).
@@ -262,7 +274,54 @@ le serveur) puis renvoie vers `redirect_uri`. Cette adresse doit avoir la même 
 que l'URL de l'application ou l'une de ses redirect URIs déclarées ; sinon l'utilisateur reste sur la page de
 connexion du serveur.
 
-## 7. Exemples de code
+## 7. Back-channel logout : déconnexion immédiate
+
+Standard [OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html).
+Quand un utilisateur est **bloqué**, **déconnecté partout**, **perd l'accès** à l'application, est **supprimé** ou
+réinitialise son mot de passe, le serveur envoie, de serveur à serveur, un *logout token* à chaque application
+concernée qui a déclaré une **URL de déconnexion back-channel** (admin → Applications, ou option
+`--backchannel-logout-uri` de `app:application:create`).
+
+```http
+POST /auth/backchannel-logout HTTP/1.1
+Host: app1.mydomain.com
+Content-Type: application/x-www-form-urlencoded
+
+logout_token=eyJ0eXAiOiJsb2dvdXQrand0IiwiYWxnIjoiUlMyNTYifQ…
+```
+
+```json
+{
+  "iss": "https://oauth.mydomain.com",
+  "aud": "app1",
+  "iat": 1790950000, "exp": 1790950120,
+  "jti": "5d1c0a9e3f7b4c2a8e6d1f0b9a7c3e21",
+  "sub": "alice@mydomain.com",
+  "uid": 42,
+  "events": { "http://schemas.openid.net/event/backchannel-logout": {} }
+}
+```
+
+L'application :
+
+1. vérifie le jeton : signature RS256 (clé publique du serveur), `iss`, `aud` = son client ID, `iat`/`exp`, présence
+   de l'événement, absence de `nonce` ([détail](architecture-application-cliente.md#le-logout-token)) ; sinon `400` ;
+2. enregistre « utilisateur `uid` révoqué maintenant » dans un registre partagé ;
+3. répond `200` ;
+4. à chaque requête, ferme toute session de cet utilisateur ouverte **avant** cette date.
+
+Le serveur envoie les notifications juste après l'action de l'administrateur, en parallèle, avec 5 s de délai
+d'attente et deux nouvelles tentatives en cas d'erreur réseau ou `429`/`5xx`. Un échec définitif est journalisé ;
+l'accès est alors coupé au renouvellement suivant du jeton (≤ 15 min).
+
+Tester l'URL d'une application (l'utilisateur est réellement déconnecté de cette application) :
+
+```bash
+make prod-console c="app:application:test-backchannel-logout app1 alice@mydomain.com"
+#  [OK] https://app1.mydomain.com/auth/backchannel-logout a répondu HTTP 200 : notification acceptée.
+```
+
+## 8. Exemples de code
 
 ### PHP sans dépendance
 
@@ -420,296 +479,11 @@ app.get('/logout', (req, res) => {
 Pour vérifier le JWT localement : bibliothèque [`jose`](https://github.com/panva/jose)
 (`importSPKI(pem, 'RS256')` puis `jwtVerify(token, key, { audience: CLIENT_ID, algorithms: ['RS256'] })`).
 
-### Nuxt (SSR)
+### Nuxt (SSR), Nuxt + Python, HTML/JS + Python
 
-Une application **Nuxt avec rendu serveur** est un client confidentiel : le serveur Nitro de Nuxt échange le code,
-garde le client secret et les jetons ; le navigateur ne reçoit qu'un cookie de session chiffré (`httpOnly`). Les
-pages Vue appellent vos routes `server/api/…`, qui ajoutent l'access token : c'est le modèle *BFF*, recommandé pour
-les applications navigateur.
-
-Exemple complet et testé : [`examples/nuxt-client`](../examples/nuxt-client) (Nuxt 4,
-[nuxt-auth-utils](https://github.com/atinux/nuxt-auth-utils) pour la session).
-
-| Fonctionne | Ne fonctionne pas |
-|---|---|
-| `nuxt build` déployé avec son serveur Node (ou Bun, Deno, edge : le code n'utilise que Web Crypto) | `nuxt generate` / `ssr: false` sans serveur : rien pour garder le secret ni appeler `/token` |
-| Appels à `/token` et `/api/userinfo` depuis `server/` | Appels à `/token` depuis le code Vue (bloqués par CORS, et le secret serait exposé) |
-
-Configuration (côté serveur uniquement : surtout pas dans `runtimeConfig.public`) :
-
-```ts
-// nuxt.config.ts
-export default defineNuxtConfig({
-  compatibilityDate: '2025-07-15',
-  modules: ['nuxt-auth-utils'],
-  runtimeConfig: {
-    // Côté serveur uniquement (jamais envoyé au navigateur). Valeurs surchargées par les variables
-    // d'environnement NUXT_OAUTH_SERVER_URL, NUXT_OAUTH_CLIENT_ID, NUXT_OAUTH_CLIENT_SECRET, NUXT_OAUTH_REDIRECT_URI.
-    oauth: {
-      serverUrl: 'https://oauth.mydomain.com',
-      clientId: '',
-      clientSecret: '',
-      redirectUri: 'https://app1.mydomain.com/auth/callback',
-    },
-  },
-})
-```
-
-```dotenv
-NUXT_OAUTH_SERVER_URL=https://oauth.mydomain.com
-NUXT_OAUTH_CLIENT_ID=app1
-NUXT_OAUTH_CLIENT_SECRET=…
-NUXT_OAUTH_REDIRECT_URI=https://app1.mydomain.com/auth/callback
-NUXT_SESSION_PASSWORD=…            # 32 caractères minimum : openssl rand -hex 32
-```
-
-**Connexion** — redirection vers le serveur avec state et PKCE, en mémorisant la page à rouvrir :
-
-```ts
-// server/routes/auth/login.get.ts
-// 1. Redirection vers le serveur OAuth2, avec state (anti-CSRF) et PKCE
-export default defineEventHandler(async (event) => {
-  const { serverUrl, clientId, redirectUri } = useRuntimeConfig(event).oauth
-  const state = randomString(16)
-  const verifier = randomString(48)
-
-  // Page à rouvrir après connexion (chemin relatif uniquement : pas de redirection ouverte)
-  const target = String(getQuery(event).redirect ?? '/')
-  const returnTo = target.startsWith('/') && !target.startsWith('//') ? target : '/'
-
-  // Valeurs temporaires (10 min), lues au retour sur /auth/callback
-  const cookie = { httpOnly: true, secure: true, sameSite: 'lax' as const, path: '/auth', maxAge: 600 }
-  setCookie(event, 'oauth_state', state, cookie)
-  setCookie(event, 'oauth_verifier', verifier, cookie)
-  setCookie(event, 'oauth_return_to', returnTo, cookie)
-
-  return sendRedirect(event, `${serverUrl}/authorize?${new URLSearchParams({
-    response_type: 'code',
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    scope: 'profile email',
-    state,
-    code_challenge: await pkceChallenge(verifier),
-    code_challenge_method: 'S256',
-  })}`)
-})
-```
-
-**Retour du serveur** — vérification du state, échange du code, ouverture de la session. Le champ `secure` de la
-session n'est jamais envoyé au navigateur :
-
-```ts
-// server/routes/auth/callback.get.ts
-// 2. Retour du serveur OAuth2 : vérification du state, échange du code, ouverture de la session
-export default defineEventHandler(async (event) => {
-  const { redirectUri } = useRuntimeConfig(event).oauth
-  const query = getQuery(event)
-  const state = getCookie(event, 'oauth_state')
-  const verifier = getCookie(event, 'oauth_verifier')
-  const returnTo = getCookie(event, 'oauth_return_to') ?? '/'
-  for (const name of ['oauth_state', 'oauth_verifier', 'oauth_return_to']) {
-    deleteCookie(event, name, { path: '/auth' })
-  }
-
-  if (query.error) {
-    throw createError({ statusCode: 400, message: `Connexion refusée : ${query.error}` })
-  }
-  if (!state || !verifier || query.state !== state) {
-    throw createError({ statusCode: 400, message: 'State invalide, recommencez la connexion' })
-  }
-
-  const tokens = await requestTokens(event, {
-    grant_type: 'authorization_code',
-    redirect_uri: redirectUri,
-    code: String(query.code ?? ''),
-    code_verifier: verifier,
-  }).catch(() => {
-    throw createError({ statusCode: 401, message: 'Code refusé, recommencez la connexion' })
-  })
-  const userinfo = await fetchUserinfo(event, tokens.access_token)
-
-  // Identifiez l'utilisateur par userinfo.id (stable) ; créez ou mettez à jour votre compte local ici.
-  await replaceUserSession(event, {
-    user: { id: userinfo.id, email: userinfo.email, name: userinfo.name },
-    secure: tokensForSession(tokens),
-  })
-
-  return sendRedirect(event, returnTo)
-})
-```
-
-**Renouvellement des jetons** — `getAccessToken(event)` renvoie un access token valide et le renouvelle quand il
-arrive à expiration (`server/utils/oauth.ts`, extrait) :
-
-```ts
-// Renouvellements en cours, par refresh token : deux requêtes simultanées partagent le même appel
-// (le refresh token n'est utilisable qu'une fois ; un second appel échouerait et déconnecterait l'utilisateur).
-const pendingRefreshes = new Map<string, Promise<OAuthTokens>>()
-
-/**
- * Access token valide pour la session courante, renouvelé s'il arrive à expiration.
- * Si le renouvellement est refusé (accès retiré, compte bloqué, « déconnecter partout »…),
- * la session est fermée et une erreur 401 est renvoyée.
- */
-export async function getAccessToken(event: H3Event): Promise<string> {
-  const { secure } = await requireUserSession(event)
-  if (!secure) {
-    throw createError({ statusCode: 401, message: 'Session invalide' })
-  }
-  if (Date.now() < secure.refreshAt) {
-    return secure.accessToken
-  }
-
-  let refresh = pendingRefreshes.get(secure.refreshToken)
-  if (!refresh) {
-    refresh = requestTokens(event, { grant_type: 'refresh_token', refresh_token: secure.refreshToken })
-      .finally(() => setTimeout(() => pendingRefreshes.delete(secure.refreshToken), 10_000))
-    pendingRefreshes.set(secure.refreshToken, refresh)
-  }
-
-  try {
-    const tokens = await refresh
-    // Rotation : on enregistre le NOUVEAU refresh token
-    await setUserSession(event, { secure: tokensForSession(tokens) })
-    return tokens.access_token
-  }
-  catch {
-    await clearUserSession(event)
-    throw createError({ statusCode: 401, message: 'Session expirée, reconnectez-vous' })
-  }
-}
-```
-
-```ts
-// server/api/me.get.ts — API protégée appelée par les pages
-// Exemple d'API protégée : utilise l'access token (renouvelé si besoin) pour appeler /api/userinfo.
-// Une réponse 401/403 signifie que l'accès a été retiré : on ferme la session.
-export default defineEventHandler(async (event) => {
-  const accessToken = await getAccessToken(event)
-
-  try {
-    return await fetchUserinfo(event, accessToken)
-  }
-  catch {
-    await clearUserSession(event)
-    throw createError({ statusCode: 401, message: 'Accès retiré, reconnectez-vous' })
-  }
-})
-```
-
-**Pages protégées** — middleware de route, puis `definePageMeta({ middleware: 'auth' })` dans la page :
-
-```ts
-// app/middleware/auth.ts
-// Pages protégées : definePageMeta({ middleware: 'auth' })
-export default defineNuxtRouteMiddleware((to) => {
-  const { loggedIn } = useUserSession()
-  if (!loggedIn.value) {
-    return navigateTo(`/auth/login?redirect=${encodeURIComponent(to.fullPath)}`, { external: true })
-  }
-})
-```
-
-Côté Vue, `useUserSession()` fournit `loggedIn` et `user` ; `useFetch('/api/me')` appelle l'API protégée.
-
-**Déconnexion** :
-
-```ts
-// server/routes/auth/logout.get.ts
-// 3. Déconnexion locale puis globale (le serveur OAuth2 ferme sa session et renvoie vers l'application)
-export default defineEventHandler(async (event) => {
-  const { serverUrl, redirectUri } = useRuntimeConfig(event).oauth
-  await clearUserSession(event)
-
-  const home = `${new URL(redirectUri).origin}/`
-  return sendRedirect(event, `${serverUrl}/logout?redirect_uri=${encodeURIComponent(home)}`)
-})
-```
-
-#### Deux pièges propres au rendu serveur (gérés par l'exemple)
-
-1. **Le cookie renouvelé pendant le rendu serveur est perdu.** Un `useFetch('/api/…')` exécuté pendant le rendu
-   est un appel *interne* : si cet appel renouvelle les jetons, son nouveau cookie de session n'est **pas** renvoyé
-   au navigateur, qui garde l'ancien refresh token, déjà consommé. Résultat : l'utilisateur est déconnecté au
-   renouvellement suivant. Solution : renouveler dans un **middleware serveur**, sur la requête de la page
-   elle-même, avant le rendu :
-
-   ```ts
-   // server/middleware/oauth-refresh.ts
-   /**
-    * Renouvelle les jetons au début de chaque requête (page ou API) si l'access token expire bientôt.
-    *
-    * Indispensable avec le rendu serveur : un useFetch('/api/…') exécuté pendant le rendu est un appel
-    * interne, dont le cookie de session mis à jour n'est PAS renvoyé au navigateur. Sans ce middleware,
-    * le navigateur garderait l'ancien refresh token (déjà consommé) et l'utilisateur serait déconnecté.
-    * Ici, le renouvellement a lieu sur la requête de la page elle-même : le nouveau cookie part avec la page,
-    * et les appels internes de la même page réutilisent les jetons obtenus (voir pendingRefreshes).
-    */
-   export default defineEventHandler(async (event) => {
-     if (/^\/(auth\/|_nuxt\/|api\/_auth\/|__nuxt)/.test(event.path)) {
-       return
-     }
-     const session = await getUserSession(event)
-     if (!session.user || !session.secure) {
-       return
-     }
-     // En cas d'échec (accès retiré, compte bloqué…), la session est fermée : la page s'affiche déconnectée
-     await getAccessToken(event).catch(() => {})
-   })
-   ```
-
-2. **Renouvellements simultanés.** Une page qui lance plusieurs appels en parallèle renouvellerait plusieurs fois
-   le même refresh token ; le serveur n'accepte que le premier, et les autres déconnecteraient l'utilisateur.
-   `getAccessToken` partage donc un renouvellement en cours entre les requêtes (`pendingRefreshes`). Ce partage est
-   propre à chaque processus : si vous faites tourner **plusieurs instances** de l'application, activez l'affinité
-   de session sur le répartiteur de charge, ou stockez les jetons dans un stockage partagé (Redis via
-   `useStorage()`) avec un verrou.
-
-Testé de bout en bout contre le serveur, avec des access tokens de 20 secondes pour forcer les renouvellements :
-page protégée → connexion → retour sur la page demandée, profil rendu côté serveur, aucun jeton dans la page ni dans
-la session exposée, renouvellement pendant le rendu serveur puis renouvellements successifs, 5 appels simultanés
-(un seul renouvellement), accès retiré (401 et session fermée), SSO, déconnexion globale, protection contre les
-redirections ouvertes.
-
-La session tient dans le cookie (≈ 2,5 Ko avec les deux jetons, sous la limite de 4 Ko). Si vous y ajoutez beaucoup
-de données, gardez les jetons côté serveur (Redis, base de données) et ne mettez en session qu'un identifiant.
-
-### Python (Flask + Authlib)
-
-```python
-from authlib.integrations.flask_client import OAuth
-from flask import Flask, redirect, session, url_for
-import os
-
-app = Flask(__name__)
-app.secret_key = os.environ["SESSION_SECRET"]
-oauth = OAuth(app)
-oauth.register(
-    name="sso",
-    client_id=os.environ["OAUTH_CLIENT_ID"],
-    client_secret=os.environ["OAUTH_CLIENT_SECRET"],
-    authorize_url="https://oauth.mydomain.com/authorize",
-    access_token_url="https://oauth.mydomain.com/token",
-    api_base_url="https://oauth.mydomain.com/",
-    client_kwargs={"scope": "profile email", "code_challenge_method": "S256"},
-)
-
-@app.route("/login")
-def login():
-    return oauth.sso.authorize_redirect(url_for("callback", _external=True))
-
-@app.route("/oauth/callback")
-def callback():
-    token = oauth.sso.authorize_access_token()          # vérifie state + PKCE
-    session["user"] = oauth.sso.get("api/userinfo", token=token).json()
-    session["token"] = token
-    return redirect("/")
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("https://oauth.mydomain.com/logout?redirect_uri=https://app1.mydomain.com/")
-```
+Voir [Adapter une application](adapter-une-application.md) : mise en œuvre complète (connexion, renouvellement,
+back-channel logout, pièges du rendu serveur) avec l'exemple testé [`examples/nuxt-client`](../examples/nuxt-client)
+pour Nuxt, et le module Python `oauth_client.py` pour les backends Python.
 
 ### Application existante avec « OAuth2 générique » : exemple Grafana
 
@@ -735,7 +509,7 @@ Redirect URI à déclarer : `https://grafana.mydomain.com/login/generic_oauth`. 
 **OpenID Connect** avec découverte automatique (certaines versions de Nextcloud, Gitea, Proxmox…) ne sont pas
 encore compatibles : voir la [feuille de route](../ROADMAP.md).
 
-## 8. Tester son intégration
+## 9. Tester son intégration
 
 - **Application de démonstration** : en développement, `make demo email=moi@example.com` puis
   <http://localhost:8081> montre le parcours complet et le contenu des jetons (voir
@@ -746,10 +520,14 @@ encore compatibles : voir la [feuille de route](../ROADMAP.md).
   (même si votre application n'existe pas encore), puis échangez-le avec la commande `curl` de la section 3.3
   (dans les 10 minutes).
 
-Cas à vérifier : utilisateur sans accès, accès retiré pendant une session (refus au renouvellement), compte bloqué,
-déconnexion depuis votre application puis depuis une autre application.
+- **Back-channel logout** : `make console c="app:application:test-backchannel-logout app1 moi@example.com"`
+  envoie un logout token à votre URL et affiche la réponse.
 
-## 9. Erreurs fréquentes
+Cas à vérifier : utilisateur sans accès, accès retiré pendant une session (session fermée immédiatement par
+back-channel, sinon au renouvellement), compte bloqué, déconnexion depuis votre application puis depuis une autre
+application. Liste complète : [Adapter une application, section 6](adapter-une-application.md#6-vérifier-lapplication-adaptée).
+
+## 10. Erreurs fréquentes
 
 | Symptôme | Cause | Solution |
 |---|---|---|
@@ -763,9 +541,12 @@ déconnexion depuis votre application puis depuis une autre application.
 | `/api/userinfo` répond 403 | application désactivée, ou accès de l'utilisateur retiré | Déconnectez l'utilisateur. |
 | L'utilisateur voit « Vous n'avez pas accès à l'application » | aucun accès attribué | L'administrateur doit lui donner l'accès (ou activer *Inscription ouverte*). |
 | Après déconnexion, l'utilisateur reste sur la page de connexion du serveur | `redirect_uri` de `/logout` hors de l'origine de votre application | Utilisez l'URL de l'application déclarée. |
+| Logout token refusé par l'application : `iss` invalide | `DEFAULT_URI` du serveur différent de l'URL attendue par l'application | `DEFAULT_URI` = URL publique exacte du serveur, sans `/` final ; même valeur côté application |
+| « Échec du back-channel logout » dans les journaux du serveur | URL injoignable depuis le serveur (DNS, pare-feu, nom Docker), ou réponse ≠ 2xx | Tester avec `app:application:test-backchannel-logout` ; l'URL doit être joignable par le serveur OAuth, pas seulement par le navigateur |
+| Notification acceptée (200) mais l'utilisateur reste connecté | Registre des révocations non partagé entre instances, ou non consulté à chaque requête, ou date de login absente de la session | Registre dans Redis / la base ; contrôle dans un middleware global ; `logged_in_at` enregistré au callback |
 | State invalide au retour | session de votre application perdue entre l'aller et le retour (cookie `SameSite=Strict`, domaine différent) | Cookie de session en `SameSite=Lax`, même domaine pour `/login` et le callback. |
 
-## 10. Liste de contrôle avant la mise en production
+## 11. Liste de contrôle avant la mise en production
 
 - [ ] HTTPS partout ; redirect URIs de production en `https://`, sans URI de développement.
 - [ ] Client secret dans une variable d'environnement ou un coffre à secrets, jamais dans le dépôt ni le navigateur.
@@ -776,3 +557,6 @@ déconnexion depuis votre application puis depuis une autre application.
 - [ ] Échec de renouvellement ou `/api/userinfo` en 401/403 → déconnexion locale.
 - [ ] Bouton de déconnexion qui passe par `/logout?redirect_uri=…`.
 - [ ] Session de votre application renouvelée après connexion (protection contre la fixation de session).
+- [ ] URL de back-channel logout déclarée et testée ; logout token entièrement vérifié ; registre des révocations
+      partagé et consulté à chaque requête.
+- [ ] Règles de [l'architecture d'une application cliente](architecture-application-cliente.md) respectées.

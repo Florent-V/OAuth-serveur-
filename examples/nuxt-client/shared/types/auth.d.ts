@@ -6,6 +6,11 @@ declare module '#auth-utils' {
     name?: string
   }
 
+  // Date d'ouverture de la session (comparée aux révocations reçues par back-channel logout)
+  interface UserSession {
+    loggedInAt?: number
+  }
+
   // Données réservées au serveur (jamais renvoyées au navigateur)
   interface SecureSessionData {
     accessToken: string

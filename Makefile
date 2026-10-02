@@ -103,7 +103,8 @@ revoke: ## Bloque un utilisateur, ex. make revoke email=...
 
 demo: ## Application de démonstration (http://localhost:DEMO_PORT), ex. make demo email=moi@example.com
 	@$(CONSOLE) app:application:create "Démo" --id=demo --public --open-registration --skip-if-exists \
-		--home-url=http://localhost:$(DEMO_PORT)/ --redirect-uri=http://localhost:$(DEMO_PORT)/callback
+		--home-url=http://localhost:$(DEMO_PORT)/ --redirect-uri=http://localhost:$(DEMO_PORT)/callback \
+		--backchannel-logout-uri=http://demo:8081/backchannel-logout
 	@if [ -n "$(email)" ]; then $(CONSOLE) app:access:grant $(email) demo; fi
 	@$(DOCKER_COMP) --profile demo up --detach demo
 	@echo "Démo : http://localhost:$(DEMO_PORT)  (application « demo », inscription ouverte)"
@@ -163,7 +164,8 @@ prod-admin: prod-check ## Crée un administrateur, ex. make prod-admin email=moi
 	@$(PROD_CONSOLE) app:user:create $(email) --admin
 
 prod-app: prod-check ## Déclare une application, ex. make prod-app name="App 1" id=app1 url=https://app1.mydomain.com
-	@$(PROD_CONSOLE) app:application:create "$(name)" --id=$(id) --home-url=$(url) --redirect-uri=$(url)/oauth/callback
+	@$(PROD_CONSOLE) app:application:create "$(name)" --id=$(id) --home-url=$(url)/ --redirect-uri=$(url)/auth/callback \
+		--backchannel-logout-uri=$(url)/auth/backchannel-logout
 
 prod-grant: prod-check ## Donne l'accès, ex. make prod-grant email=... app=app1
 	@$(PROD_CONSOLE) app:access:grant $(email) $(app)

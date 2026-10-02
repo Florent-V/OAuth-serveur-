@@ -45,8 +45,25 @@ Protocole : **OAuth 2.0**, flux *Authorization Code* (avec PKCE) et *Refresh Tok
 y a accès immédiatement. Sinon (par défaut), le compte est créé mais un administrateur doit attribuer l'accès.
 
 Retirer un accès, bloquer un compte ou désactiver une application **rend les jetons concernés inutilisables** :
-`/api/userinfo` et le renouvellement des jetons sont refusés immédiatement ; une application qui se contente de
-vérifier la signature du JWT localement perd l'accès au plus tard à son expiration (15 min).
+`/api/userinfo` et le renouvellement des jetons sont refusés immédiatement.
+
+## Révocation : comment les applications sont coupées
+
+Une application garde sa propre session après la connexion. Pour qu'une révocation la coupe vite, deux mécanismes
+standard se complètent (voir [Architecture d'une application cliente](architecture-application-cliente.md)) :
+
+| Couche | Principe | Délai |
+|---|---|---|
+| **1. Jetons courts + rotation** | L'application renouvelle l'access token (15 min) avec le refresh token (à usage unique). Après une révocation, le renouvellement est refusé et l'application ferme sa session. | ≤ 15 min, garanti |
+| **3. Back-channel logout** ([OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)) | Le serveur envoie aussitôt un *logout token* signé à l'application, qui ferme les sessions de l'utilisateur. | Quelques secondes |
+
+Le back-channel logout est déclenché par : le retrait de l'accès à une application (seule celle-ci est prévenue),
+« Déconnecter partout », le blocage, la suppression du compte et la réinitialisation du mot de passe. Les
+notifications partent juste après l'action, en parallèle, avec nouvelles tentatives ; si l'une échoue, la couche 1
+coupe l'accès au renouvellement suivant.
+
+(La couche 2 des standards, l'introspection de jeton, sert aux API qui reçoivent des jetons de clients tiers : elle
+n'est pas nécessaire avec l'architecture recommandée, où chaque application est elle-même le client.)
 
 ## Le parcours de connexion en détail
 
@@ -126,8 +143,12 @@ Durées réglables dans `config/packages/reset_password.yaml`.
 - **Depuis une application** : elle redirige vers `/logout?redirect_uri=https://app1.mydomain.com/`. La session du
   serveur est fermée (l'utilisateur devra se reconnecter pour toutes les applications), puis il revient sur
   l'application. Seules les adresses des applications déclarées sont acceptées (pas de redirection ouverte).
-- **Par l'administrateur** : « Déconnecter partout » ferme toutes les sessions, oublie les appareils de confiance
-  et révoque tous les jetons ; « Bloquer » fait de même et désactive le compte. Voir [Administration](administration.md#révoquer-un-utilisateur).
+- **Par l'administrateur** : « Déconnecter partout » ferme toutes les sessions, oublie les appareils de confiance,
+  révoque tous les jetons et prévient les applications (back-channel logout) ; « Bloquer » fait de même et désactive
+  le compte. Voir [Administration](administration.md#révoquer-un-utilisateur).
+- La déconnexion depuis une application ne prévient pas les autres applications : elles gardent leur session
+  jusqu'à leur prochain passage par le serveur (pas encore d'identifiant de session `sid`, voir la
+  [feuille de route](../ROADMAP.md)).
 
 ## Personnalisation par application
 
@@ -180,7 +201,7 @@ Internet ──HTTPS──▶ Caddy (machine hôte, certificats Let's Encrypt)
 | `src/Entity` | `User` (compte, accès, MFA), `Application` (client OAuth2 + personnalisation) |
 | `src/Controller` | Connexion, inscription, MFA, mot de passe oublié, portail, `/api/userinfo`, administration |
 | `src/EventSubscriber` | Contrôle d'accès à `/authorize`, claims du JWT, déconnexion, en-têtes de sécurité, sessions |
-| `src/Security`, `src/Service` | MFA, révocation des sessions et des jetons |
+| `src/Security`, `src/Service` | MFA, révocation des sessions et des jetons, back-channel logout |
 | `src/Command` | Commandes `app:*` (utilisateurs, applications, accès) |
 | `templates/` | Pages (Twig) et e-mails |
 | `tests/` | Tests fonctionnels (PHPUnit) et test de bout en bout (`tests/e2e`) |

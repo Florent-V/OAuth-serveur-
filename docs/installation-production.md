@@ -62,7 +62,7 @@ openssl rand -hex 32    # à exécuter une fois pour chaque secret
 | `APP_SECRET` | un secret généré (**32 caractères minimum**, sinon le conteneur refuse de démarrer) |
 | `OAUTH_PASSPHRASE` | un secret généré (protège la clé privée RSA) |
 | `OAUTH_ENCRYPTION_KEY` | un secret généré (chiffre les codes et refresh tokens) |
-| `DEFAULT_URI` | `https://oauth.mydomain.com` (sert à construire les liens des e-mails) |
+| `DEFAULT_URI` | `https://oauth.mydomain.com` : URL publique exacte, sans `/` final. Sert aux liens des e-mails et d'émetteur (`iss`) des logout tokens : les applications le vérifient |
 | `SITE_NAME` | nom affiché, ex. `"Mon compte"` |
 | `MAILER_DSN` | `brevo+api://VOTRE_CLE_API@default` (ou en SMTP : `brevo+smtp://LOGIN_SMTP:CLE_SMTP@default`) |
 | `MAILER_FROM_EMAIL` / `MAILER_FROM_NAME` | l'expéditeur validé dans Brevo |
@@ -217,5 +217,7 @@ Cron : `php bin/console league:oauth2-server:clear-expired-tokens` chaque nuit.
 | Caddy n'obtient pas de certificat | DNS pas encore propagé, ou ports 80/443 fermés : `journalctl -u caddy`. |
 | Les codes de connexion n'arrivent pas | `make prod-mailtest to=…` ; vérifiez la clé API, l'expéditeur et les logs Brevo (*Transactionnel → Logs*). |
 | Les liens des e-mails pointent vers `localhost` | `DEFAULT_URI` mal renseigné. |
+| Les applications refusent les logout tokens (`iss` invalide) | `DEFAULT_URI` différent de l'URL du serveur configurée dans les applications. |
+| « Échec du back-channel logout » dans `make prod-logs` | URL de l'application injoignable depuis le serveur, ou réponse ≠ 2xx : `make prod-console c="app:application:test-backchannel-logout <app> <email>"`. Le conteneur doit pouvoir joindre l'application (URL publique en HTTPS, ou réseau Docker partagé). |
 | Les adresses IP des journaux sont toutes celles de Docker | `TRUSTED_PROXIES` doit valoir `private_ranges`. |
 | `502 Bad Gateway` | Le conteneur est arrêté ou en démarrage : `make prod-ps`, `make prod-logs`. |

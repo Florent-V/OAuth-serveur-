@@ -63,6 +63,14 @@ class Application extends AbstractClient
     #[Assert\Length(max: 500)]
     private ?string $loginMessage = null;
 
+    /**
+     * OpenID Connect Back-Channel Logout : URL de l'application qui reçoit un « logout token » (POST)
+     * quand un utilisateur est bloqué, déconnecté partout ou perd l'accès à l'application.
+     */
+    #[ORM\Column(length: 255, nullable: true)]
+    #[Assert\Url(protocols: ['http', 'https'], requireTld: false)]
+    private ?string $backchannelLogoutUri = null;
+
     /** Uniquement utilisé à la création (admin) : client public sans secret (SPA, mobile → PKCE obligatoire). */
     private bool $publicClient = false;
 
@@ -172,6 +180,18 @@ class Application extends AbstractClient
     public function setLoginMessage(?string $loginMessage): static
     {
         $this->loginMessage = null !== $loginMessage && '' !== trim($loginMessage) ? trim($loginMessage) : null;
+
+        return $this;
+    }
+
+    public function getBackchannelLogoutUri(): ?string
+    {
+        return $this->backchannelLogoutUri;
+    }
+
+    public function setBackchannelLogoutUri(?string $backchannelLogoutUri): static
+    {
+        $this->backchannelLogoutUri = null !== $backchannelLogoutUri && '' !== trim($backchannelLogoutUri) ? trim($backchannelLogoutUri) : null;
 
         return $this;
     }

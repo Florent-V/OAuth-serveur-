@@ -87,7 +87,10 @@ class ApplicationCrudController extends AbstractCrudController
         yield UrlField::new('homeUrl', 'URL de l\'application')
             ->setHelp('Ex. https://app1.mydomain.com — affichée sur le portail et autorisée pour la redirection après déconnexion.');
         yield TextareaField::new('redirectUrisText', 'Redirect URIs')
-            ->setHelp('Une URL par ligne, ex. https://app1.mydomain.com/oauth/callback')
+            ->setHelp('Une URL par ligne, ex. https://app1.mydomain.com/auth/callback')
+            ->hideOnIndex();
+        yield UrlField::new('backchannelLogoutUri', 'URL de déconnexion back-channel')
+            ->setHelp('Facultatif (recommandé). Ex. https://app1.mydomain.com/auth/backchannel-logout — l\'application y reçoit un « logout token » dès qu\'un utilisateur est bloqué, déconnecté partout ou perd l\'accès, et ferme sa session immédiatement.')
             ->hideOnIndex();
         yield BooleanField::new('publicClient', 'Client public (sans secret)')
             ->setHelp('À cocher pour une SPA / application mobile : PKCE obligatoire, pas de client secret. Laisser décoché pour une application serveur.')
@@ -152,6 +155,7 @@ class ApplicationCrudController extends AbstractCrudController
             ->setBackgroundColor($entityInstance->getBackgroundColor())
             ->setLoginMessage($entityInstance->getLoginMessage())
             ->setRedirectUris(...$entityInstance->getRedirectUris())
+            ->setBackchannelLogoutUri($entityInstance->getBackchannelLogoutUri())
             ->setGrants(new Grant(OAuth2Grants::AUTHORIZATION_CODE), new Grant(OAuth2Grants::REFRESH_TOKEN))
             ->setActive($entityInstance->isActive());
         foreach ($entityInstance->getUsers() as $user) {

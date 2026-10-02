@@ -54,9 +54,8 @@ check "renouvellement des jetons" '[[ $(curl_ "$DEMO/") == *"Jetons renouvelés"
 
 console app:access:grant "$EMAIL" demo --revoke -q
 page=$(curl_ "$DEMO/")
-check "accès retiré : /api/userinfo refusé immédiatement" '[[ $page == *"HTTP 401"* ]]'
-curl_ -o /dev/null "$DEMO/refresh"
-check "accès retiré : renouvellement refusé" '[[ $(curl_ "$DEMO/") == *"Renouvellement refusé"* ]]'
+check "accès retiré : session de la démo fermée immédiatement (back-channel logout)" \
+    '[[ $page == *"Session fermée par le serveur"* && $page == *"pas connecté"* ]]'
 console app:access:grant "$EMAIL" demo -q
 
 url=$(location "$(location "$DEMO/login")")

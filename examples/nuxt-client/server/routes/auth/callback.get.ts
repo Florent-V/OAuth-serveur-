@@ -30,6 +30,7 @@ export default defineEventHandler(async (event) => {
   await replaceUserSession(event, {
     user: { id: userinfo.id, email: userinfo.email, name: userinfo.name },
     secure: tokensForSession(tokens),
+    loggedInAt: Date.now(),
   })
 
   return sendRedirect(event, returnTo)

@@ -21,6 +21,8 @@ services:
       # Les clés et logos restent dans leurs volumes (déclarés dans compose.yaml)
     environment:
       APP_ENV: dev
+      # URL publique du serveur : liens des e-mails et émetteur (« iss ») des logout tokens
+      DEFAULT_URI: http://localhost:${HTTP_PORT:-8080}
       # E-mails (codes MFA, mot de passe oublié) capturés par Mailpit : http://localhost:${MAILPIT_PORT:-8025}
       MAILER_DSN: smtp://mailer:1025
       XDEBUG_MODE: ${XDEBUG_MODE:-off}
