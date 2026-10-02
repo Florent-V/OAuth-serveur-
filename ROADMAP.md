@@ -46,9 +46,12 @@ reflète la priorité suggérée.
 - [ ] **OpenID Connect complet** : `id_token`, `/.well-known/openid-configuration`, `/.well-known/jwks.json`
   → compatibilité « plug and play » avec les applications qui gèrent OIDC (Nextcloud, Grafana, Gitea, Outline,
   Portainer, Proxmox…).
-- [ ] **Introspection** (RFC 7662) et **révocation** (RFC 7009) de jetons pour les applications.
-- [ ] **Déconnexion back-channel** (OIDC Back-Channel Logout) : prévenir les applications quand l'utilisateur
-  se déconnecte ou est révoqué.
+- [x] **Déconnexion back-channel** (OIDC Back-Channel Logout) : les applications sont prévenues quand un
+  utilisateur est révoqué (blocage, « déconnecter partout », accès retiré, suppression, mot de passe réinitialisé).
+- [ ] **Identifiant de session `sid`** dans les logout tokens (avec OpenID Connect) : propager aussi la déconnexion
+  volontaire d'un utilisateur à ses autres applications, appareil par appareil.
+- [ ] **Introspection** (RFC 7662) et **révocation** (RFC 7009) de jetons, pour des API qui recevraient des jetons
+  de clients tiers (inutile avec l'architecture BFF recommandée).
 - [ ] **CORS** configurable par application (pour les SPA sans backend qui appellent `/token` depuis le navigateur ;
   en attendant, passer par un petit backend, voir docs/integrer-une-application.md).
 - [ ] **Consentement optionnel** par application (pour des applications tierces).

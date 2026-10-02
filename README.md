@@ -11,7 +11,8 @@ app2.mydomain.com
 - **Un seul compte par personne**, commun à toutes les applications, avec **connexion unique** (SSO).
 - **Double authentification** par code e-mail, avec appareils de confiance.
 - **Contrôle d'accès par application** : l'administrateur décide qui peut utiliser quoi.
-- **Révocation immédiate** : déconnecter partout, bloquer un compte, retirer un accès.
+- **Révocation immédiate** : déconnecter partout, bloquer un compte, retirer un accès ; les applications sont
+  prévenues en quelques secondes (**OpenID Connect Back-Channel Logout**).
 - Pages de connexion **personnalisables** par application (logo, couleurs, message).
 - Mot de passe oublié, inscription, portail des applications, administration web.
 - OAuth 2.0 standard (*Authorization Code* + PKCE, *Refresh Token*), jetons JWT signés RS256.
@@ -24,7 +25,9 @@ app2.mydomain.com
 | [Installation – développement](docs/installation-developpement.md) | Sur votre poste avec Docker, en 3 commandes |
 | [Installation – production](docs/installation-production.md) | Serveur, HTTPS avec Caddy, e-mails Brevo, sauvegardes, mises à jour |
 | [Administration](docs/administration.md) | Applications, utilisateurs, accès, personnalisation, révocation |
-| [**Intégrer une application**](docs/integrer-une-application.md) | Pour les développeurs : brancher une application sur le serveur (PHP, Symfony, Node.js, Python, Grafana…) |
+| [Architecture d'une application cliente](docs/architecture-application-cliente.md) | Les règles à respecter dans toute application protégée (BFF, jetons, révocation) |
+| [**Adapter une application**](docs/adapter-une-application.md) | Protéger une application existante : Nuxt SSR, Nuxt + Python, HTML/JS + Python, cas général, migration depuis Casdoor |
+| [Intégrer une application](docs/integrer-une-application.md) | Référence du protocole : paramètres, requêtes, back-channel logout, erreurs, exemples (PHP, Symfony, Node.js, Grafana…) |
 | [Tests](docs/tests.md) | Tests fonctionnels, test de bout en bout, intégration continue |
 | [Feuille de route](ROADMAP.md) | Prochaines fonctionnalités |
 

@@ -54,13 +54,14 @@ le portail. L'administration est sur <http://localhost:8080/admin>.
 make demo email=moi@example.com
 ```
 
-Cette commande déclare l'application « Démo » (client ID `demo`), vous y donne accès et la démarre sur
-<http://localhost:8081>. Cliquez sur **« Se connecter avec le serveur OAuth2 »** : vous passez par le serveur, puis
+Cette commande déclare l'application « Démo » (client ID `demo`, avec back-channel logout vers
+`http://demo:8081/backchannel-logout`), vous y donne accès et la démarre sur <http://localhost:8081>. Cliquez sur **« Se connecter avec le serveur OAuth2 »** : vous passez par le serveur, puis
 revenez sur la démo, connecté. La page affiche le contenu du jeton (JWT), la vérification de sa signature et la
 réponse de `/api/userinfo`. Essayez ensuite :
 
 - **Renouveler les jetons** (refresh token) ;
-- dans `/admin`, **retirer** l'application Démo à votre compte, puis recharger la démo : `/api/userinfo` répond 401 ;
+- dans `/admin`, **retirer** l'application Démo à votre compte, puis recharger la démo : la session est fermée
+  (« Session fermée par le serveur d'authentification ») grâce au back-channel logout ;
 - **Se déconnecter (partout)** : déconnexion de la démo *et* du serveur.
 
 Le code de la démo (`examples/demo-client/index.php`, un seul fichier commenté) sert d'exemple d'intégration :

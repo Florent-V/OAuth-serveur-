@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
     return await fetchUserinfo(event, accessToken)
   }
   catch {
-    await clearUserSession(event)
+    await endSession(event)
     throw createError({ statusCode: 401, message: 'Accès retiré, reconnectez-vous' })
   }
 })

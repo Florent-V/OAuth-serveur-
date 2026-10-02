@@ -9,7 +9,9 @@ authentification par e-mail, et un administrateur qui décide qui a accès à qu
 | Installer le serveur sur mon poste pour développer ou essayer | [Installation – développement](installation-developpement.md) |
 | Mettre le serveur en production sur mon serveur | [Installation – production](installation-production.md) |
 | Ajouter des applications, gérer les utilisateurs, les accès, les comptes | [Administration](administration.md) |
-| **Brancher une application sur le serveur** (développeur de l'application) | [Intégrer une application](integrer-une-application.md) |
+| **Les règles à respecter dans une application cliente** (BFF, jetons, révocation) | [Architecture d'une application cliente](architecture-application-cliente.md) |
+| **Protéger une application existante** (Nuxt SSR, Nuxt + Python, HTML/JS + Python, autre, depuis Casdoor) | [Adapter une application](adapter-une-application.md) |
+| Référence du protocole : paramètres, requêtes, back-channel logout, erreurs | [Intégrer une application](integrer-une-application.md) |
 | Lancer les tests, tester le parcours complet | [Tests](tests.md) |
 | Voir les évolutions prévues | [Feuille de route](../ROADMAP.md) |
 
@@ -54,3 +56,5 @@ make demo email=moi@example.com               # application de démonstration
 | **MFA** | Double authentification : code à 6 chiffres envoyé par e-mail à la connexion. |
 | **Appareil de confiance** | Navigateur sur lequel le code MFA n'est plus demandé pendant 30 jours. |
 | **SSO** | *Single Sign-On* : une connexion unique pour toutes les applications. |
+| **Back-channel logout** | Notification envoyée par le serveur à une application (*logout token* signé) pour qu'elle ferme la session d'un utilisateur révoqué. |
+| **BFF** | *Backend For Frontend* : la partie serveur de l'application mène la connexion OAuth et garde les jetons ; le navigateur n'a qu'un cookie. |

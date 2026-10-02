@@ -54,6 +54,22 @@ export function tokensForSession(tokens: OAuthTokens) {
   }
 }
 
+/**
+ * Ferme la session de l'utilisateur.
+ *
+ * clearUserSession() envoie un cookie vide au navigateur, mais h3 relit ensuite la session depuis le cookie
+ * de la requête en cours : sans la suite, le reste de cette requête (rendu de la page, /api/_auth/session…)
+ * verrait encore l'utilisateur connecté. On retire donc aussi le cookie de la requête.
+ */
+export async function endSession(event: H3Event): Promise<void> {
+  await clearUserSession(event)
+  const name = useRuntimeConfig(event).session?.name || 'nuxt-session'
+  event.node.req.headers.cookie = (event.node.req.headers.cookie ?? '')
+    .split(';')
+    .filter((cookie: string) => !cookie.trim().startsWith(`${name}=`))
+    .join(';')
+}
+
 // Renouvellements en cours, par refresh token : deux requêtes simultanées partagent le même appel
 // (le refresh token n'est utilisable qu'une fois ; un second appel échouerait et déconnecterait l'utilisateur).
 const pendingRefreshes = new Map<string, Promise<OAuthTokens>>()
@@ -86,7 +102,7 @@ export async function getAccessToken(event: H3Event): Promise<string> {
     return tokens.access_token
   }
   catch {
-    await clearUserSession(event)
+    await endSession(event)
     throw createError({ statusCode: 401, message: 'Session expirée, reconnectez-vous' })
   }
 }

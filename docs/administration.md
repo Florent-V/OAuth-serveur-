@@ -53,7 +53,8 @@ application serveur, un **client secret**, à transmettre au développeur de l'a
 | **Client ID** | Identifiant technique, ex. `app1`. Laissez vide pour un identifiant aléatoire. **Non modifiable** ensuite. |
 | **Description** | Note interne. |
 | **URL de l'application** | Ex. `https://app1.mydomain.com/`. Lien du portail ; autorise aussi le retour après déconnexion. |
-| **Redirect URIs** | Les URL de retour (callback) de l'application, **une par ligne**, ex. `https://app1.mydomain.com/oauth/callback`. Comparées **exactement** : schéma, domaine, port et chemin. |
+| **Redirect URIs** | Les URL de retour (callback) de l'application, **une par ligne**, ex. `https://app1.mydomain.com/auth/callback`. Comparées **exactement** : schéma, domaine, port et chemin. |
+| **URL de déconnexion back-channel** | Facultatif, recommandé. Ex. `https://app1.mydomain.com/auth/backchannel-logout`. Le serveur y envoie un *logout token* dès qu'un utilisateur est bloqué, déconnecté partout ou perd l'accès : l'application ferme sa session en quelques secondes. Doit être joignable **depuis le serveur**. |
 | **Client public** | À cocher pour une application mobile ou de bureau, qui ne peut pas garder de secret (PKCE obligatoire). Laissez décoché pour un site avec un backend (cas habituel). Uniquement à la création. |
 | **Active** | Décochée, l'application est suspendue : connexion refusée avec un message, jetons inutilisables. |
 | **Inscription ouverte** | Cochée, une personne qui crée son compte **depuis cette application** y a accès immédiatement. Sinon, vous devez lui attribuer l'accès. |
@@ -66,18 +67,24 @@ l'application doit être mise à jour).
 ### En ligne de commande
 
 ```bash
-# Raccourci : redirect URI = <url>/oauth/callback
+# Raccourci : redirect URI <url>/auth/callback, back-channel <url>/auth/backchannel-logout
 make prod-app name="Application 1" id=app1 url=https://app1.mydomain.com
 
 # Commande complète
 make prod-console c='app:application:create "Application 1" --id=app1 \
     --home-url=https://app1.mydomain.com \
-    --redirect-uri=https://app1.mydomain.com/oauth/callback \
-    --redirect-uri=http://localhost:3000/oauth/callback'
+    --redirect-uri=https://app1.mydomain.com/auth/callback \
+    --backchannel-logout-uri=https://app1.mydomain.com/auth/backchannel-logout'
 ```
 
-Options : `--public` (client public), `--open-registration`, `--skip-if-exists` (ne fait rien si le client ID
-existe déjà, pratique dans un script).
+Options : `--public` (client public), `--open-registration`, `--backchannel-logout-uri`, `--skip-if-exists` (ne fait
+rien si le client ID existe déjà, pratique dans un script).
+
+Tester l'URL de back-channel d'une application (l'utilisateur est réellement déconnecté de cette application) :
+
+```bash
+make prod-console c="app:application:test-backchannel-logout app1 alice@mydomain.com"
+```
 
 ### Plusieurs environnements d'une même application
 
@@ -143,8 +150,8 @@ Trois façons, au choix :
   ```
 
 L'accès donné est effectif à la prochaine connexion de l'utilisateur à l'application. **Retirer** un accès révoque
-immédiatement ses jetons pour cette application : `/api/userinfo` et le renouvellement des jetons sont refusés
-aussitôt ; une application qui ne vérifie que la signature du JWT perd l'accès en 15 minutes au plus.
+immédiatement ses jetons pour cette application et la prévient (back-channel logout) : une application conforme
+ferme la session de l'utilisateur en quelques secondes, et au plus tard au renouvellement de son jeton (15 min).
 
 Quand un utilisateur sans accès essaie de se connecter, il voit *« Vous n'avez pas accès à l'application X.
 Contactez l'administrateur… »* : c'est le signal qu'il faut lui attribuer l'application.
@@ -155,7 +162,7 @@ Contactez l'administrateur… »* : c'est le signal qu'il faut lui attribuer l'a
 
 | Action | Effet |
 |---|---|
-| **Déconnecter partout** | Ferme toutes ses sessions (y compris « rester connecté »), oublie ses appareils de confiance et révoque tous ses jetons. Le compte reste actif : il peut se reconnecter (avec un code MFA). À utiliser après la perte d'un téléphone ou d'un ordinateur. |
+| **Déconnecter partout** | Ferme toutes ses sessions (y compris « rester connecté »), oublie ses appareils de confiance, révoque tous ses jetons et prévient ses applications (back-channel logout). Le compte reste actif : il peut se reconnecter (avec un code MFA). À utiliser après la perte d'un téléphone ou d'un ordinateur. |
 | **Bloquer immédiatement** | Idem, et désactive le compte. À utiliser en cas de départ ou de compte compromis. |
 
 En ligne de commande :
@@ -186,7 +193,8 @@ sont prévus : voir la [feuille de route](../ROADMAP.md).
 |---|---|
 | `app:user:create <email> [nom] [--admin] [--password=…]` | Créer un utilisateur |
 | `app:user:revoke <email> [--logout-only]` | Bloquer (ou seulement déconnecter partout) |
-| `app:application:create <nom> [--id] [--home-url] [--redirect-uri]… [--public] [--open-registration] [--skip-if-exists]` | Déclarer une application |
+| `app:application:create <nom> [--id] [--home-url] [--redirect-uri]… [--backchannel-logout-uri] [--public] [--open-registration] [--skip-if-exists]` | Déclarer une application |
+| `app:application:test-backchannel-logout <client_id> <email>` | Envoyer un logout token à l'application (test de son URL) |
 | `app:access:grant <email> <client_id> [--revoke]` | Donner / retirer un accès |
 | `league:oauth2-server:clear-expired-tokens` | Purger les jetons expirés (cron) |
 | `mailer:test <email>` | Tester l'envoi d'e-mails |
@@ -194,7 +202,7 @@ sont prévus : voir la [feuille de route](../ROADMAP.md).
 | Raccourci `make` (production) | Équivalent |
 |---|---|
 | `make prod-admin email=…` | `app:user:create … --admin` |
-| `make prod-app name=… id=… url=…` | `app:application:create` avec redirect URI `<url>/oauth/callback` |
+| `make prod-app name=… id=… url=…` | `app:application:create` avec redirect URI `<url>/auth/callback` et back-channel `<url>/auth/backchannel-logout` |
 | `make prod-grant email=… app=…` | `app:access:grant` |
 | `make prod-revoke email=…` | `app:user:revoke` |
 | `make prod-mailtest to=…` | `mailer:test` |

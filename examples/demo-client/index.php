@@ -12,7 +12,11 @@
  *   CLIENT_ID           client ID de l'application                (demo)
  *   CLIENT_SECRET       client secret (vide = client public, PKCE seul)
  *   REDIRECT_URI        callback déclaré dans l'admin              (http://localhost:8081/callback)
- *   OAUTH_PUBLIC_KEY    clé publique du serveur pour vérifier le JWT localement (facultatif)
+ *   OAUTH_PUBLIC_KEY    clé publique du serveur : vérification des JWT et des logout tokens
+ *   OAUTH_ISSUER        identifiant du serveur (« iss » des logout tokens)  (OAUTH_PUBLIC_URL par défaut)
+ *
+ * Back-channel logout : déclarer http://<démo>/backchannel-logout comme « URL de déconnexion back-channel »
+ * de l'application ; le serveur y envoie un logout token quand l'utilisateur est révoqué.
  *
  * NE PAS utiliser tel quel en production : pas de gestion d'erreurs réseau avancée, pas de HTTPS.
  */
@@ -28,9 +32,10 @@ $clientSecret = $env('CLIENT_SECRET');
 $redirectUri = $env('REDIRECT_URI', 'http://localhost:8081/callback');
 $publicKeyFile = $env('OAUTH_PUBLIC_KEY');
 $homeUrl = substr($redirectUri, 0, (int) strrpos($redirectUri, '/')).'/';
+$issuer = rtrim($env('OAUTH_ISSUER', $publicUrl), '/');
 
-session_name('DEMOSESSID');
-session_start();
+// Révocations reçues par back-channel logout : uid => date. Un vrai projet utilisera Redis ou sa base de données.
+const REVOCATIONS_FILE = '/tmp/oauth-demo-revocations.json';
 
 /** Encodage base64url (RFC 7636). */
 function b64url(string $data): string
@@ -106,7 +111,89 @@ function redirect(string $url): never
     exit;
 }
 
+/** Dates de révocation par utilisateur (uid => timestamp), lues ou modifiées sous verrou. */
+function revocations(?callable $update = null): array
+{
+    $handle = fopen(REVOCATIONS_FILE, 'c+');
+    flock($handle, \LOCK_EX);
+    $data = json_decode((string) stream_get_contents($handle), true) ?: [];
+    if (null !== $update) {
+        $data = $update($data);
+        ftruncate($handle, 0);
+        rewind($handle);
+        fwrite($handle, (string) json_encode($data));
+    }
+    flock($handle, \LOCK_UN);
+    fclose($handle);
+
+    return $data;
+}
+
+/**
+ * Vérifie un logout token (OpenID Connect Back-Channel Logout 1.0, section 2.6) et renvoie l'uid de l'utilisateur.
+ */
+function verifyLogoutToken(string $jwt, string $publicKeyFile, string $issuer, string $clientId): int
+{
+    $parts = explode('.', $jwt);
+    if (3 !== \count($parts)) {
+        throw new RuntimeException('jeton illisible');
+    }
+    $decode = static fn (string $p): string => (string) base64_decode(strtr($p, '-_', '+/'));
+    $header = json_decode($decode($parts[0]), true) ?: [];
+    $claims = json_decode($decode($parts[1]), true) ?: [];
+
+    $checks = [
+        'algorithme RS256' => 'RS256' === ($header['alg'] ?? null),
+        'signature' => is_readable($publicKeyFile)
+            && 1 === openssl_verify($parts[0].'.'.$parts[1], $decode($parts[2]), (string) file_get_contents($publicKeyFile), \OPENSSL_ALGO_SHA256),
+        'émetteur (iss)' => $issuer === ($claims['iss'] ?? null),
+        'destinataire (aud)' => \in_array($clientId, (array) ($claims['aud'] ?? []), true),
+        'date (iat)' => isset($claims['iat']) && abs(time() - (int) $claims['iat']) < 300,
+        'expiration (exp)' => isset($claims['exp']) && (int) $claims['exp'] > time(),
+        'événement' => \is_array($claims['events']['http://schemas.openid.net/event/backchannel-logout'] ?? null),
+        'pas de nonce' => !isset($claims['nonce']),
+        'utilisateur (uid)' => \is_int($claims['uid'] ?? null),
+    ];
+    foreach ($checks as $check => $ok) {
+        if (!$ok) {
+            throw new RuntimeException('logout token invalide : '.$check);
+        }
+    }
+
+    return $claims['uid'];
+}
+
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', \PHP_URL_PATH);
+
+// 5. Back-channel logout : appelé par le serveur OAuth2 (pas par un navigateur), donc avant toute session
+if ('/backchannel-logout' === $path) {
+    header('Cache-Control: no-store');
+    header('Content-Type: application/json');
+    try {
+        if ('POST' !== $_SERVER['REQUEST_METHOD']) {
+            throw new RuntimeException('POST attendu');
+        }
+        $uid = verifyLogoutToken((string) ($_POST['logout_token'] ?? ''), $publicKeyFile, $issuer, $clientId);
+        // Toutes les sessions de cet utilisateur ouvertes avant maintenant deviennent invalides
+        revocations(static fn (array $data): array => [$uid => microtime(true)] + $data);
+        echo '{}';
+    } catch (RuntimeException $e) {
+        http_response_code(400);
+        echo json_encode(['error' => 'invalid_request', 'error_description' => $e->getMessage()]);
+    }
+    exit;
+}
+
+session_name('DEMOSESSID');
+session_start();
+
+// Session ouverte avant une révocation reçue par back-channel : fermée immédiatement
+$uid = $_SESSION['user']['id'] ?? null;
+if (\is_int($uid) && ($_SESSION['logged_in_at'] ?? 0) <= (revocations()[$uid] ?? 0)) {
+    $_SESSION = ['flash' => 'Session fermée par le serveur d\'authentification (back-channel logout).'];
+    session_regenerate_id(true);
+}
+
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
@@ -153,6 +240,7 @@ switch ($path) {
         storeTokens($tokens);
         // Identité de l'utilisateur : on interroge /api/userinfo une fois, puis on garde son « id » en session
         [, $_SESSION['user']] = getWithToken($internalUrl.'/api/userinfo', $tokens['access_token']);
+        $_SESSION['logged_in_at'] = microtime(true);
         session_regenerate_id(true);
         redirect('/');
 
